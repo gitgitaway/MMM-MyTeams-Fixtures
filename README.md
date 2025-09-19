@@ -45,7 +45,7 @@ A MagicMirror² module that displays upcoming fixtures for your football team. I
 2. Clone or copy this module into `MMM-MyTeams-Fixtures`:
 
    ```bash
-   git clone https://github.com/gitgitaway/MMM-MyTeams-Fixtures`.
+   git clone https://github.com/gitgitaway/MMM-MyTeams-Fixtures
    ```
 3. Install dependencies
 ```bash
@@ -160,3 +160,4 @@ Thanks to the MagicMirror community for inspiration and guidance! Special thanks
 ## License
 
 MIT
+
