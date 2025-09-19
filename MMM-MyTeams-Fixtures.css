@@ -1,0 +1,139 @@
+.myteams-fixtures {
+  color: #fff;
+}
+
+.myteams-fixtures .loading,
+.myteams-fixtures .error,
+.myteams-fixtures .empty {
+  opacity: 0.85;
+  padding: 6px 0;
+}
+
+.myteams-fixtures .error {
+  color: #ffb3b3;
+}
+
+.myteams-fixtures .fixtures-table {
+  width: 100%;
+  line-height: 1.2;
+  border-collapse: collapse;
+  margin-top: 6px;
+}
+
+.myteams-fixtures .fixtures-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+  text-align: left;
+}
+
+.myteams-fixtures .filter-bar {
+  margin-bottom: 6px;
+  border-top: 2px solid #555;
+  border-bottom: 2px solid #555;
+}
+.myteams-fixtures .filter-btn {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  cursor: pointer;
+}
+.myteams-fixtures .filter-btn.active {
+  background: rgba(1,135,73,0.4);
+}
+
+.myteams-fixtures .fixtures-table thead th {
+  text-align: left;
+  font-weight: 500;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.2);
+}
+
+.myteams-fixtures .fixtures-table tbody td {
+  padding: 4px 6px;
+  border-bottom: 1px dashed rgba(255,255,255,0.12);
+  vertical-align: middle;
+  text-align: left;
+}
+
+/* Back to Top control inside scroll container */
+.myteams-fixtures .scroll-controls {
+  position: sticky;               /* stick near the bottom inside the scroll area */
+  bottom: 8px;                    /* offset from bottom */
+  display: flex;
+  justify-content: flex-end;      /* align to the right for visibility */
+  padding: 6px 6px 0 6px;         /* small padding, top aligns with table bottom */
+  opacity: 0;                     /* hidden by default */
+  transition: opacity 0.2s ease-in-out;
+  pointer-events: none;           /* don't block scroll when hidden */
+}
+.myteams-fixtures .scroll-controls.visible {
+  opacity: 1;                     /* show when scrolled */
+  pointer-events: auto;           /* clickable when visible */
+}
+.myteams-fixtures .btn-back-to-top {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #fff;
+  background: rgba(1,135,73,0.6); /* Celtic green tone */
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.myteams-fixtures .btn-back-to-top:hover {
+  background: rgba(1,135,73,0.8);
+}
+
+.myteams-fixtures .fixtures-table tbody tr.home td.col-ha {
+  color: #ffffff;
+ /* background: #018749; /* Celtic green */
+  border-radius: 3px;
+}
+
+.myteams-fixtures .fixtures-table tbody tr.away td.col-ha {
+  color: #018749;
+ /* background: #ffffff; */
+  border-radius: 3px;
+}
+
+.myteams-fixtures .col-date { width: 90px; opacity: 0.9; text-align: left; }
+.myteams-fixtures .col-time { width: 70px; opacity: 0.9; text-align: left; }
+.myteams-fixtures .col-opp  { min-width: 160px; text-align: left; }
+.myteams-fixtures .col-ha   { width: 10px; text-align: center; font-weight: 500; }
+.myteams-fixtures .col-comp { min-width: 160px; opacity: 0.9; text-align: left; padding-left: 12px; }
+
+.myteams-fixtures .source-footer {
+  margin-top: 6px;
+  opacity: 0.8;
+  text-align: center;
+}
+
+.small { font-size: 13px; }
+.xsmall { font-size: 11px; }
+
+/* Compact column widths without truncation */
+.myteams-fixtures .col-date { width: 80px; }
+.myteams-fixtures .col-time { width: 60px; }
+.myteams-fixtures .col-opp  { min-width: 130px; }
+.myteams-fixtures .col-ha   { width: 28px; text-align: center; }
+.myteams-fixtures .col-comp { min-width: 130px; padding-left: 8px; }
+
+/* Scroll container limiting max height and enabling vertical scrolling */
+.myteams-fixtures .fixtures-scroll {
+  max-height: 560px;             /* limit table block height */
+  overflow-y: auto;              /* enable vertical scrolling when overflow */
+  overflow-x: hidden;            /* avoid horizontal scrollbar */
+  -webkit-overflow-scrolling: touch; /* smooth scroll on touch devices */
+  scrollbar-width: thin;         /* Firefox thinner scrollbar */
+}
+
+/* Sticky table header for improved readability when scrolling */
+.myteams-fixtures .fixtures-scroll thead th {
+  position: sticky;              /* stick to top inside scroll container */
+  top: 0;                        /* affix to top edge of the scroll area */
+  z-index: 1;                    /* ensure it sits above rows when overlapping */
+  background: rgba(0, 0, 0, 0.6);/* semi-opaque background for contrast */
+  backdrop-filter: saturate(120%);
+}

@@ -1,0 +1,29 @@
+/* User customisation for MMM-MyTeams-Fixtures (LFOTVsource) */
+
+/* Wrapper spacing */
+.myteams-fixtures { margin-top: 4px; }
+
+/* Title */
+.myteams-fixtures .fixtures-title { text-align: left; color: #fff; }
+
+/* Filter bar */
+.myteams-fixtures .filter-bar { margin-bottom: 6px; }
+.myteams-fixtures .filter-btn { background: rgba(255,255,255,0.06); }
+.myteams-fixtures .filter-btn.active { background: #018749; /* Celtic green */ }
+
+/* Table */
+.myteams-fixtures .fixtures-table thead th { text-align: left; }
+.myteams-fixtures .fixtures-table tbody td { text-align: left; }
+
+/* Column widths and font sizes */
+.small { font-size: 12px; }
+.xsmall { font-size: 10px; }
+
+.myteams-fixtures .col-date { width: 76px; }
+.myteams-fixtures .col-time { width: 56px; }
+.myteams-fixtures .col-opp  { min-width: 120px; }
+.myteams-fixtures .col-ha   { width: 34px; }
+.myteams-fixtures .col-comp { min-width: 120px; }
+
+/* Footer */
+.myteams-fixtures .source-footer { text-align: center; }
