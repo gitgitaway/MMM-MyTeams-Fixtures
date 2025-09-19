@@ -37,15 +37,24 @@ A MagicMirror² module that displays upcoming fixtures for your football team. I
 
 
 ## Installation
-1. Go to your MagicMirror modules folder
-```bash
-cd ~/MagicMirror/modules
-```
-2. Clone your repo or copy this module into MMM-MyTeams-Fixtures
+
+1. Navigate to your MagicMirror modules folder:
+   ```bash
+   cd ~/MagicMirror/modules
+   ```
+2. Clone or copy this module into `MMM-MyTeams-Fixtures`:
+
+   ```bash
+   git clone https://github.com/gitgitaway/MMM-MyTeams-Fixtures`.
+   ```
 3. Install dependencies
 ```bash
 npm install
 ```
+
+4. Add the config to ~/MagicMirror/config/config.js`
+
+5. Restart MagicMirror.
 
 ## Configuration
 Add to your MagicMirror config.js:
@@ -149,4 +158,5 @@ Thanks to the MagicMirror community for inspiration and guidance! Special thanks
 
 
 ## License
+
 MIT
