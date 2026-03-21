@@ -332,6 +332,14 @@ class SharedRequestManager {
             this.log(`  Error cause: ${error.cause ? JSON.stringify(error.cause) : 'none'}`, 'error');
             this.log(`  Fetch type used: ${fetchTypeUsed}`, 'error');
             this.log(`  Options passed: ${JSON.stringify(Object.keys(options))}`, 'error');
+            if (options.headers) {
+                const debugHeaders = {};
+                Object.keys(options.headers).forEach(k => {
+                    const val = options.headers[k];
+                    debugHeaders[k] = (k.toLowerCase().includes('key') || k.toLowerCase().includes('token') || k.toLowerCase().includes('auth')) ? '********' : val;
+                });
+                this.log(`  Headers sent: ${JSON.stringify(debugHeaders)}`, 'error');
+            }
 
             // Handle retries
             if (request.retries < request.maxRetries && this.shouldRetry(error)) {
@@ -358,10 +366,14 @@ class SharedRequestManager {
      * Determine if an error is retryable
      */
     shouldRetry(error) {
-        // Retry on network errors, timeouts, and 5xx errors
+        // Never retry bot-detection or auth blocks — retrying just wastes time
+        if (error.message.includes('HTTP 403')) return false;
+        if (error.message.includes('HTTP 401')) return false;
+        // Retry on network errors, timeouts, rate limits, and 5xx errors
         if (error.name === 'AbortError') return true;
         if (error.message.includes('ETIMEDOUT')) return true;
         if (error.message.includes('ECONNRESET')) return true;
+        if (error.message.includes('HTTP 429')) return true;
         if (error.message.includes('HTTP 5')) return true;
         return false;
     }

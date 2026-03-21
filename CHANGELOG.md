@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **BUG-001**: Updated `doFetch` headers in `node_helper.js` to mimic a real browser — resolves HTTP 403 Forbidden errors when scraping `footballwebpages.co.uk` and other sources; fixes issue where only home matches were displayed due to bot detection blocks
+- **BUG-001**: Added two-step cookie-aware FWP fetch (`fetchFWPWithCookieSupport`) in `node_helper.js` — a pre-flight request to the FWP homepage establishes a session and captures any anti-bot cookies (via `Set-Cookie`), which are then forwarded with `Sec-Fetch-Site: same-origin` on the fixtures request; resolves persistent HTTP 403 Forbidden blocks on Raspberry Pi/Debian environments
+- **BUG-002**: Extracted `FWP_BROWSER_HEADERS` constant to eliminate duplicated header definitions across `doFetch` and the new pre-flight function
+- **BUG-003**: Extended the domestic away-fixture supplement fallback chain (`tryScrapersInOrder`) to include BBC Sport and LiveFootballOnTV as secondary sources when FWP is blocked — users no longer see only home matches when FWP returns 403
+- **BUG-004**: `SharedRequestManager.shouldRetry()` now explicitly fast-fails on HTTP 403 and HTTP 401 (bot-detection/auth blocks) without burning retry slots, and correctly retries HTTP 429 (rate-limit) responses
+- **BUG-005**: Improved `SharedRequestManager.js` error logging to include full request details (headers sent, URL, error cause) for better diagnostic visibility when requests fail
 
 ## [1.3.0] - 2026-03-19
 

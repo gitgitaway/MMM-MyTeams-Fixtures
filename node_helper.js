@@ -104,21 +104,95 @@ function saveCacheToDisk(ttl) {
   }
 }
 
+// FWP-specific browser headers used in pre-flight and main request
+const FWP_BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+  "Accept-Language": "en-GB,en;q=0.9,en-US;q=0.8",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Connection": "keep-alive",
+  "Upgrade-Insecure-Requests": "1",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+  "Sec-CH-UA": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+  "Sec-CH-UA-Mobile": "?0",
+  "Sec-CH-UA-Platform": "\"Windows\"",
+  "Cache-Control": "no-cache",
+  "Pragma": "no-cache"
+};
+
+// Two-step FWP fetch: pre-flight homepage to capture session cookies, then fetch target URL
+async function fetchFWPWithCookieSupport(url, timeoutMs, debug) {
+  const FWP_ORIGIN = "https://www.footballwebpages.co.uk";
+  let cookieString = "";
+
+  // Step 1: Pre-flight to homepage — establishes a session and collects any anti-bot cookies
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), Math.min(timeoutMs, 8000));
+    const preRes = await _fetchImpl(FWP_ORIGIN + "/", {
+      headers: { ...FWP_BROWSER_HEADERS },
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+
+    // Extract Set-Cookie headers (getSetCookie() is Node 18+; fall back to get('set-cookie'))
+    let setCookies = [];
+    if (typeof preRes.headers.getSetCookie === "function") {
+      setCookies = preRes.headers.getSetCookie();
+    } else {
+      const raw = preRes.headers.get("set-cookie");
+      if (raw) setCookies = raw.split(/,(?=[^ ])/);
+    }
+    cookieString = setCookies.map(c => c.split(";")[0]).filter(Boolean).join("; ");
+    if (debug) {
+      console.log(`[MyTeams:helper] FWP pre-flight status: ${preRes.status}, cookies obtained: ${cookieString ? "yes (" + cookieString.substring(0, 50) + "...)" : "none"}`);
+    }
+  } catch (e) {
+    console.warn("[MyTeams:helper] FWP pre-flight failed (will retry without cookies):", e.message);
+  }
+
+  // Step 2: Fetch fixtures page with session cookies and same-origin Sec-Fetch-Site
+  const extraHeaders = {
+    "Referer": FWP_ORIGIN + "/",
+    "Sec-Fetch-Site": "same-origin"
+  };
+  if (cookieString) {
+    extraHeaders["Cookie"] = cookieString;
+  }
+  return await doFetch(url, { headers: extraHeaders }, timeoutMs);
+}
+
 // Generic fetch with timeout and headers - NOW USES SHARED REQUEST MANAGER
 async function doFetch(url, options = {}, timeoutMs = 15000) {
   if (!_fetchImpl) throw new Error(`Fetch not available (${_fetchType})`);
 
+  // Merge headers, avoiding case-insensitive duplicates
+  const finalHeaders = { ...FWP_BROWSER_HEADERS };
+  if (options.headers) {
+    Object.keys(options.headers).forEach(k => {
+      // Find and delete any existing header with same name (case-insensitive)
+      const lowerK = k.toLowerCase();
+      Object.keys(finalHeaders).forEach(existingK => {
+        if (existingK.toLowerCase() === lowerK) delete finalHeaders[existingK];
+      });
+      finalHeaders[k] = options.headers[k];
+    });
+  }
+
+  // Add Referer if not present (helps with some scrapers)
+  if (!Object.keys(finalHeaders).some(k => k.toLowerCase() === "referer")) {
+    try {
+      const urlObj = new URL(url);
+      finalHeaders["Referer"] = `${urlObj.protocol}//${urlObj.hostname}/`;
+    } catch (_) {}
+  }
+
   const fetchOptions = {
     ...options,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Language": "en-GB,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
-      ...(options.headers || {})
-    }
+    headers: finalHeaders
   };
 
   try {
@@ -1146,7 +1220,9 @@ async function fetchAndParseScraper(sourceKey, teamName, teamId, timeoutMs, debu
 
   if (!url) throw new Error(`[MyTeams:helper] SEC-002: scraper URL for "${mapKey}" is blocked (unsafe teamName)`);
 
-  const res = await doFetch(url, {}, timeoutMs);
+  const res = mapKey === "fwp"
+    ? await fetchFWPWithCookieSupport(url, timeoutMs, debug)
+    : await doFetch(url, {}, timeoutMs);
   const html = await res.text();
 
   switch (mapKey) {
@@ -1327,7 +1403,7 @@ module.exports = NodeHelper.create({
           if (apiAway === 0) {
             try {
               const { fixtures: fwpFx } = await tryScrapersInOrder(
-                { scrapeFWP: true, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: false, scrapeCFC: false },
+                { scrapeFWP: true, scrapeLFOTV: true, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
                 teamName,
                 teamId,
                 requestTimeoutMs,
