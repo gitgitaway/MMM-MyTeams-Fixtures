@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-03-21
+
+### Fixed
+
+- **BUG-001**: Updated `doFetch` headers in `node_helper.js` to mimic a real browser — resolves HTTP 403 Forbidden errors when scraping `footballwebpages.co.uk` and other sources; fixes issue where only home matches were displayed due to bot detection blocks
+
 ## [1.3.0] - 2026-03-19
 
 Full module review cycle — 29 issues addressed across Security, Performance, Accessibility, Innovation, UI/UX, and Design. See `moduleReview.md` for the complete review findings.
