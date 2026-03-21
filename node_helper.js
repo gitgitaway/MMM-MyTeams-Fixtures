@@ -111,9 +111,12 @@ async function doFetch(url, options = {}, timeoutMs = 15000) {
   const fetchOptions = {
     ...options,
     headers: {
-      "User-Agent": "MMM-MyTeams-Fixtures (+MagicMirror)",
-      "Accept": "application/json, text/html;q=0.9",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
       "Cache-Control": "no-cache",
+      "Pragma": "no-cache",
       ...(options.headers || {})
     }
   };
