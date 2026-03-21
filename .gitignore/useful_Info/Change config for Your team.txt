@@ -1,0 +1,18 @@
+ 
+1:   Preferred method - as this will always give the upto date sportsdb Ids
+
+ * Finding Team IDs:
+ * Visit: https://www.thesportsdb.com/api/v1/json/3/searchteams.php?t=TEAM_NAME
+ * Replace TEAM_NAME with your team (e.g., "Juventus", "Arsenal")
+ * Look for "idTeam" in the JSON response
+ * 
+ * Finding League IDs:
+ * Visit: https://www.thesportsdb.com/api/v1/json/3/search_all_leagues.php?c=COUNTRY
+ * Replace COUNTRY with country name (e.g., "Scotland", "England", "Germany", "Austria", "Latvia" )
+ * Look for "idLeague" in the JSON response
+ 
+
+2:  Secondary method - check the ".\data\TheSportsDB_TeamID.csv" Caution some codes may have changed,
+
+
+3:  Tertiary method - run a PowerShell script to repopulate check the "TheSportsDB_TeamID.csv" Caution may not get all teams.

@@ -1,0 +1,35 @@
+/* ═══════════════════════════════════════════════════════════
+   customOverrides.css  — MMM-MyTeams-Fixtures
+   User customisation file (replaces customFWP.css).
+   Place your display tweaks here — this file is loaded after
+   the main stylesheet, so any rule here wins automatically.
+   ═══════════════════════════════════════════════════════════ */
+
+/* Example: change the accent colour to red for Manchester United */
+/*
+.myteams-fixtures { --mmf-accent-color: #da020e; }
+*/
+
+/* Wrapper top margin */
+.myteams-fixtures { margin-top: 4px; }
+
+/* Filter bar adjustments */
+.myteams-fixtures .filter-btn { background: rgba(255,255,255,0.06); }
+
+/* Table alignment */
+.myteams-fixtures .fixtures-table thead th { text-align: left; }
+.myteams-fixtures .fixtures-table tbody td { text-align: left; }
+
+/* Column widths — tweak to suit your display width */
+.myteams-fixtures .col-date { width: 76px; }
+.myteams-fixtures .col-time { width: 44px; }
+.myteams-fixtures .col-opp  { min-width: 120px; }
+.myteams-fixtures .col-ha   { width: 36px; }
+.myteams-fixtures .col-comp { min-width: 120px; }
+
+/* Font size overrides */
+.small  { font-size: 12px; }
+.xsmall { font-size: 10px; }
+
+/* Footer alignment */
+.myteams-fixtures .source-footer { text-align: center; }

@@ -1,16 +1,28 @@
 {
-  "name": "MMM-MyTeam-Fixtures",
-  "version": "1.0.0",
-  "description": "MagicMirror module to display upcoming fixtures for Celtic FC from multiple configurable sources.",
-  "main": "MMM-MyTeam-Fixtures.js",
+  "name": "MMM-MyTeams-Fixtures",
+  "version": "1.3.1",
+  "description": "MagicMirror module to display upcoming fixtures for any football team from multiple configurable sources (TheSportsDB API + web scrapers).",
+  "main": "MMM-MyTeams-Fixtures.js",
   "author": "gitgitaway",
   "license": "MIT",
   "keywords": [
     "MagicMirror",
     "football",
     "fixtures",
-    "Celtic"
+    "soccer",
+    "sports",
+    "team-agnostic",
+    "Celtic",
+    "Rangers",
+    "Manchester United",
+    "Liverpool",
+    "Arsenal",
+    "Barcelona"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gitgitaway/MMM-MyTeams-Fixtures.git"
+  },
   "dependencies": {
     "cheerio": "^1.1.2",
     "node-fetch": "^2.7.0"

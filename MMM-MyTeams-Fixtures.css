@@ -1,7 +1,52 @@
+/* ═══════════════════════════════════════════════════════════════
+   MMM-MyTeams-Fixtures — stylesheet
+   DES-003: CSS custom properties for accent colour theming.
+   Override --mmf-accent-color via config.accentColor or inline.
+   ═══════════════════════════════════════════════════════════════ */
+
 .myteams-fixtures {
+  --mmf-accent-color:      #018749;   /* team primary colour — overridden by JS config.accentColor */
+  --mmf-border-color:      #555555;
+  --mmf-table-header-bg:   rgba(0, 0, 0, 0.6);
+  --mmf-filter-active-bg:  rgba(1, 135, 73, 0.4);  /* accent at 40 % opacity */
+  --mmf-scroll-bg:         rgba(0, 0, 0, 0.3);
   color: #fff;
+  max-width: 550px;
+  margin: 0 auto;
 }
 
+/* ── ACC-004: visually hidden (screen-reader only) ── */
+.myteams-fixtures .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── ACC-001: reset browser button defaults for icon / filter controls ── */
+.myteams-fixtures button.filter-btn,
+.myteams-fixtures button.refresh-btn,
+.myteams-fixtures button.clear-cache-btn,
+.myteams-fixtures button.pin-btn,
+.myteams-fixtures button.team-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* ─────────────────────────────────────────
+   State / message rows
+   ───────────────────────────────────────── */
 .myteams-fixtures .loading,
 .myteams-fixtures .error,
 .myteams-fixtures .empty {
@@ -9,38 +54,165 @@
   padding: 6px 0;
 }
 
-.myteams-fixtures .error {
-  color: #ffb3b3;
+.myteams-fixtures .error { color: #ffb3b3; }
+
+/* UX-004: Skeleton loader */
+.myteams-fixtures .fixtures-skeleton {
+  padding: 4px 0;
 }
 
-.myteams-fixtures .fixtures-table {
-  width: 100%;
-  line-height: 1.2;
-  border-collapse: collapse;
-  margin-top: 6px;
-}
-
-.myteams-fixtures .fixtures-title {
-  font-weight: 500;
-  margin-bottom: 4px;
-  text-align: left;
-}
-
-.myteams-fixtures .filter-bar {
+.myteams-fixtures .skeleton-row {
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.10) 50%,
+    rgba(255,255,255,0.04) 75%);
+  background-size: 200% 100%;
+  animation: mmf-shimmer 1.4s ease-in-out infinite;
   margin-bottom: 6px;
-  border-top: 2px solid #555;
-  border-bottom: 2px solid #555;
 }
-.myteams-fixtures .filter-btn {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 2px 6px;
+
+@keyframes mmf-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ─────────────────────────────────────────
+   Header layout
+   ───────────────────────────────────────── */
+.myteams-fixtures .fixtures-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid var(--mmf-border-color);
+}
+
+.myteams-fixtures .tabs-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.myteams-fixtures .controls-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* INN-003: Team switcher */
+.myteams-fixtures .team-switcher {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--mmf-border-color);
+}
+
+.myteams-fixtures .team-btn {
+  padding: 3px 8px;
   border-radius: 3px;
   background: rgba(255,255,255,0.06);
-  cursor: pointer;
+  font-size: 11px;
 }
-.myteams-fixtures .filter-btn.active {
-  background: rgba(1,135,73,0.4);
+
+.myteams-fixtures .team-btn.active,
+.myteams-fixtures .team-btn[aria-pressed="true"] {
+  background: var(--mmf-accent-color);
+  color: #fff;
+}
+
+/* INN-001: Next-match countdown badge */
+.myteams-fixtures .next-match-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.15);
+  white-space: nowrap;
+}
+
+.myteams-fixtures .next-match-badge.live {
+  background: rgba(220, 30, 30, 0.25);
+  border-color: rgba(220, 30, 30, 0.5);
+  color: #ff6b6b;
+  font-weight: bold;
+  animation: mmf-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mmf-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+/* ─────────────────────────────────────────
+   Filter tabs  — DES-003: use CSS var for active bg
+   ───────────────────────────────────────── */
+.myteams-fixtures .filter-btn {
+  display: inline-block;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  white-space: nowrap;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+.myteams-fixtures .filter-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.12);
+}
+
+.myteams-fixtures .filter-btn.active,
+.myteams-fixtures .filter-btn[aria-pressed="true"] {
+  background: var(--mmf-filter-active-bg);
+}
+
+/* UX-001: zero-count tabs are greyed and non-interactive */
+.myteams-fixtures .filter-btn.empty-filter,
+.myteams-fixtures .filter-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────
+   Header control icons
+   ───────────────────────────────────────── */
+.myteams-fixtures .refresh-btn,
+.myteams-fixtures .clear-cache-btn,
+.myteams-fixtures .pin-btn {
+  transition: color 0.3s ease, transform 0.3s ease;
+}
+
+.myteams-fixtures .refresh-btn:hover,
+.myteams-fixtures .clear-cache-btn:hover,
+.myteams-fixtures .pin-btn:hover {
+  color: #fff;
+}
+
+.myteams-fixtures .refresh-btn.fa-spin,
+.myteams-fixtures .clear-cache-btn.fa-spin {
+  color: var(--mmf-accent-color);
+}
+
+.myteams-fixtures .pin-btn.active {
+  color: #ff3333;
+}
+
+.myteams-fixtures .cycle-countdown { /* plain dimmed text */ }
+
+/* ─────────────────────────────────────────
+   Table
+   ───────────────────────────────────────── */
+.myteams-fixtures .fixtures-table {
+  width: 100%;
+  line-height: 1.0;
+  border-collapse: collapse;
+  margin-top: 6px;
+  table-layout: fixed;
 }
 
 .myteams-fixtures .fixtures-table thead th {
@@ -48,6 +220,9 @@
   font-weight: 500;
   padding: 4px 6px;
   border-bottom: 1px solid rgba(255,255,255,0.2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .myteams-fixtures .fixtures-table tbody td {
@@ -55,85 +230,121 @@
   border-bottom: 1px dashed rgba(255,255,255,0.12);
   vertical-align: middle;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Back to Top control inside scroll container */
-.myteams-fixtures .scroll-controls {
-  position: sticky;               /* stick near the bottom inside the scroll area */
-  bottom: 8px;                    /* offset from bottom */
+/* Column widths */
+.myteams-fixtures .col-date { width: 60px;  opacity: 0.9; }
+.myteams-fixtures .col-time { width: 44px;  opacity: 0.9; }
+.myteams-fixtures .col-opp  { width: 100px; }
+.myteams-fixtures .col-ha   { width: 32px;  text-align: center; font-weight: 500; }
+.myteams-fixtures .col-comp { width: 140px; opacity: 0.9; padding-left: 8px; }
+
+/* ACC-003: colour H/A arrows in addition to the Unicode prefix */
+.myteams-fixtures .fixtures-table tbody tr.home .col-ha { color: var(--mmf-accent-color); }
+.myteams-fixtures .fixtures-table tbody tr.away .col-ha { color: #aaaaaa; }
+
+/* INN-002: live match row highlight */
+.myteams-fixtures .fixtures-table tbody tr.live-match {
+  background: rgba(220, 30, 30, 0.12);
+}
+
+.myteams-fixtures .live-pip { font-size: 10px; }
+
+/* UX-005: tbody fade-in animation on filter change */
+.myteams-fixtures .fixtures-tbody {
+  animation: mmf-fade-in 0.25s ease-out;
+}
+
+@keyframes mmf-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─────────────────────────────────────────
+   Scroll container
+   ───────────────────────────────────────── */
+.myteams-fixtures .fixtures-scroll {
+  height: 300px;
+  max-width: 550px;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) rgba(0,0,0,0.1);
+  scroll-behavior: smooth;
+}
+
+/* Sticky table header */
+.myteams-fixtures .fixtures-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--mmf-table-header-bg);
+  backdrop-filter: saturate(120%);
+}
+
+/* ─────────────────────────────────────────
+   Back-to-top  — DES-004: higher specificity, no !important cascade
+   ───────────────────────────────────────── */
+.myteams-fixtures .fixtures-scroll .scroll-controls {
+  position: sticky;
+  bottom: 0;
   display: flex;
-  justify-content: flex-end;      /* align to the right for visibility */
-  padding: 6px 6px 0 6px;         /* small padding, top aligns with table bottom */
-  opacity: 0;                     /* hidden by default */
+  justify-content: flex-end;
+  padding: 8px;
+  background: var(--mmf-scroll-bg);
+  border-top: 1px solid rgba(255,255,255,0.1);
+  z-index: 50;
+  opacity: 0;
   transition: opacity 0.2s ease-in-out;
-  pointer-events: none;           /* don't block scroll when hidden */
+  pointer-events: none;
 }
-.myteams-fixtures .scroll-controls.visible {
-  opacity: 1;                     /* show when scrolled */
-  pointer-events: auto;           /* clickable when visible */
+
+.myteams-fixtures .fixtures-scroll .scroll-controls.visible {
+  opacity: 1;
+  pointer-events: auto;
 }
+
 .myteams-fixtures .btn-back-to-top {
-  font-size: 11px;
-  line-height: 1.2;
+  background: var(--mmf-accent-color);
   color: #fff;
-  background: rgba(1,135,73,0.6); /* Celtic green tone */
   border: 1px solid rgba(255,255,255,0.25);
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.0;
+  font-weight: bold;
   cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.4);
 }
+
 .myteams-fixtures .btn-back-to-top:hover {
-  background: rgba(1,135,73,0.8);
+  opacity: 1;
+  transform: translateY(-3px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
 }
 
-.myteams-fixtures .fixtures-table tbody tr.home td.col-ha {
-  color: #ffffff;
- /* background: #018749; /* Celtic green */
-  border-radius: 3px;
-}
-
-.myteams-fixtures .fixtures-table tbody tr.away td.col-ha {
-  color: #018749;
- /* background: #ffffff; */
-  border-radius: 3px;
-}
-
-.myteams-fixtures .col-date { width: 90px; opacity: 0.9; text-align: left; }
-.myteams-fixtures .col-time { width: 70px; opacity: 0.9; text-align: left; }
-.myteams-fixtures .col-opp  { min-width: 160px; text-align: left; }
-.myteams-fixtures .col-ha   { width: 10px; text-align: center; font-weight: 500; }
-.myteams-fixtures .col-comp { min-width: 160px; opacity: 0.9; text-align: left; padding-left: 12px; }
-
+/* ─────────────────────────────────────────
+   Footer  — UX-002: stale state
+   ───────────────────────────────────────── */
 .myteams-fixtures .source-footer {
   margin-top: 6px;
   opacity: 0.8;
   text-align: center;
 }
 
-.small { font-size: 13px; }
+.myteams-fixtures .source-footer.stale {
+  color: #ffa500;
+  opacity: 1;
+}
+
+/* ─────────────────────────────────────────
+   Utility font sizes (MagicMirror convention)
+   ───────────────────────────────────────── */
+.small  { font-size: 13px; }
 .xsmall { font-size: 11px; }
-
-/* Compact column widths without truncation */
-.myteams-fixtures .col-date { width: 80px; }
-.myteams-fixtures .col-time { width: 60px; }
-.myteams-fixtures .col-opp  { min-width: 130px; }
-.myteams-fixtures .col-ha   { width: 28px; text-align: center; }
-.myteams-fixtures .col-comp { min-width: 130px; padding-left: 8px; }
-
-/* Scroll container limiting max height and enabling vertical scrolling */
-.myteams-fixtures .fixtures-scroll {
-  max-height: 560px;             /* limit table block height */
-  overflow-y: auto;              /* enable vertical scrolling when overflow */
-  overflow-x: hidden;            /* avoid horizontal scrollbar */
-  -webkit-overflow-scrolling: touch; /* smooth scroll on touch devices */
-  scrollbar-width: thin;         /* Firefox thinner scrollbar */
-}
-
-/* Sticky table header for improved readability when scrolling */
-.myteams-fixtures .fixtures-scroll thead th {
-  position: sticky;              /* stick to top inside scroll container */
-  top: 0;                        /* affix to top edge of the scroll area */
-  z-index: 1;                    /* ensure it sits above rows when overlapping */
-  background: rgba(0, 0, 0, 0.6);/* semi-opaque background for contrast */
-  backdrop-filter: saturate(120%);
-}

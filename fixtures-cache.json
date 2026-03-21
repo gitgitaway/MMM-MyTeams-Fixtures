@@ -1,103 +1,13 @@
 {
-  "ts": 1758290559506,
+  "ts": 1774045950259,
   "ttl": 300000,
   "source": "api+fwp",
-  "key": "api|133647|4330,4364,4363,4888|4480,4481,5071|strict|searchOn",
+  "key": "api|133647|4330,4364,4363,4888|4332,4481,5071|strict|searchOn",
   "data": [
     {
-      "date": "2025-09-21",
-      "dateText": "Sun 21 Sep",
-      "timeText": "15:30",
-      "opponent": "Partick Thistle",
-      "homeAway": "A",
-      "competition": "Viaplay Cup QF",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-09-24",
-      "dateText": "Wed 24 Sep",
-      "timeText": "20:00",
-      "opponent": "Crvena Zvezda",
-      "homeAway": "A",
-      "competition": "Europa League MD1",
-      "competitionType": "european",
-      "tv": ""
-    },
-    {
-      "date": "2025-09-27",
-      "dateText": "2025-09-27",
-      "timeText": "14:00",
-      "opponent": "Hibernian",
-      "homeAway": "H",
-      "competition": "Scottish Premier League",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-02",
-      "dateText": "2025-10-02",
-      "timeText": "16:45",
-      "opponent": "Braga",
-      "homeAway": "H",
-      "competition": "UEFA Europa League",
-      "competitionType": "european",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-05",
-      "dateText": "2025-10-05",
-      "timeText": "14:00",
-      "opponent": "Motherwell",
-      "homeAway": "H",
-      "competition": "Scottish Premier League",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-19",
-      "dateText": "Sun 19 Oct",
-      "timeText": "12:00",
-      "opponent": "Dundee",
-      "homeAway": "A",
-      "competition": "Scottish Premiership",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-23",
-      "dateText": "2025-10-23",
-      "timeText": "19:00",
-      "opponent": "Sturm Graz",
-      "homeAway": "H",
-      "competition": "UEFA Europa League",
-      "competitionType": "european",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-26",
-      "dateText": "Sun 26 Oct",
-      "timeText": "12:00",
-      "opponent": "Heart of Midlothian",
-      "homeAway": "A",
-      "competition": "Scottish Premiership",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-10-29",
-      "dateText": "2025-10-29",
-      "timeText": "19:45",
-      "opponent": "Falkirk",
-      "homeAway": "H",
-      "competition": "Scottish Premier League",
-      "competitionType": "domestic",
-      "tv": ""
-    },
-    {
-      "date": "2025-11-01",
-      "dateText": "Sat 1 Nov",
-      "timeText": "15:00",
+      "date": "2026-03-22",
+      "dateText": "Sun 22 Mar",
+      "timeText": "12:30",
       "opponent": "Dundee United",
       "homeAway": "A",
       "competition": "Scottish Premiership",
@@ -105,24 +15,40 @@
       "tv": ""
     },
     {
-      "date": "2025-11-06",
-      "dateText": "Thu 6 Nov",
-      "timeText": "17:45",
-      "opponent": "FC Midtjylland",
+      "date": "2026-04-05",
+      "dateText": "Sun 5 Apr",
+      "timeText": "16:30",
+      "opponent": "Dundee",
       "homeAway": "A",
-      "competition": "Europa League MD4",
-      "competitionType": "european",
+      "competition": "Scottish Premiership",
+      "competitionType": "domestic",
       "tv": ""
     },
     {
-      "date": "2025-11-09",
-      "dateText": "2025-11-09",
-      "timeText": "16:00",
-      "opponent": "Kilmarnock",
+      "date": "2026-04-11",
+      "dateText": "2026-04-11",
+      "timeText": "14:00",
+      "opponent": "St Mirren",
       "homeAway": "H",
       "competition": "Scottish Premier League",
       "competitionType": "domestic",
-      "tv": ""
+      "tv": "",
+      "status": "Not Started",
+      "homeScore": null,
+      "awayScore": null
+    },
+    {
+      "date": "2026-04-18",
+      "dateText": "2026-04-18",
+      "timeText": "14:00",
+      "opponent": "St Mirren",
+      "homeAway": "H",
+      "competition": "Scottish FA Cup",
+      "competitionType": "domestic",
+      "tv": "",
+      "status": "Not Started",
+      "homeScore": null,
+      "awayScore": null
     }
   ]
 }

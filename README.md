@@ -1,163 +1,266 @@
 # MMM-MyTeams-Fixtures
 
-A MagicMirror² module that displays upcoming fixtures for your football team. It uses TheSportsDB API as the primary data source and can complement missing data with a reputable scraper (FootballWebPages) to ensure away fixtures always appear.
+A [MagicMirror²](https://magicmirror.builders/) module that displays upcoming football fixtures for **any team** from TheSportsDB API, with optional supplement from FootballWebPages for away fixtures.
 
-- Primary API: TheSportsDB (v3)
-- Optional supplement: FootballWebPages (FWP) when API lacks away fixtures (n.b free API only returns home fixtures)
-- Features: Auto season detection, caching, H/A indicator, optional competition name, optional countdown, client-side filters, source footer 
+[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![MagicMirror²](https://img.shields.io/badge/MagicMirror²-compatible-orange)](https://magicmirror.builders/)
+
+---
 
 ## Screenshots
-- 1: All fixtures view   ![Celtic FC All Fixtures ](./screenshots/AllFixtures.png)
-- 2: Domestic filter     ![Celtic FC Domestic Fixtures ](./screenshots/DomesticFixtures.png)
-- 3: European filter     ![Celtic FC European Fixtures ](./screenshots/EuropeanFixtures.png) 
-- 4: Home filter         ![Celtic FC Home Fixtures ](./screenshots/HomeFixtures.png) 
-- 5: Away filter         ![Celtic FC Away Fixtures ](./screenshots/AwayFixtures.png) 
 
+*Celtic · Liverpool · Bayern Munich · Roma*
 
+| | |
+|-|-|
+| ![Celtic Fixtures](./screenshots/screenshotFixtures1.png) | ![Liverpool Fixtures](./screenshots/screenshotFixtures2.png) |
+| ![Bayern Munich Fixtures](./screenshots/screenshotFixtures3.png) | ![Roma Fixtures](./screenshots/screenshotFixtures4.png) |
 
-## Table of Contents
-- Features
-- Screenshots
-- Installation
-- Configuration
-- Options (config table)
-- How data fetching works 
-- Minimum config example
-- Dependencies
-- To Do
-- License
+---
 
 ## Features
-- Shows date, time, opponent, H/A, competition
-- Live countdown (optional)
-- Client-side filters: All, Domestic, European, Home, Away
-- Auto-detect season (e.g., 2025-2026)
-- Caching to avoid rate limits
-- Clear footer with source and timestamp
 
+- **Works with any team** — Scottish, English, Spanish, European, or any club in TheSportsDB
+- **Filter tabs** — All · Domestic · European · Home · Away (with live fixture counts)
+- **Auto-cycle** — Automatically rotates through selected filter views on a timer
+- **Multi-team** — Switch between multiple clubs without restarting (INN-003)
+- **Live match display** — In-progress score shown with `🔴` badge (INN-002)
+- **Next-match countdown** — `⏱ Xd Yh` badge in the header (INN-001)
+- **Pre-match alerts** — MagicMirror notification N minutes before kick-off (INN-004)
+- **Skeleton loader** — Shimmer placeholder while fetching data
+- **Stale data warning** — Amber footer when cached data is older than 2× TTL
+- **Fully accessible** — Keyboard navigable, ARIA labels, screen reader table captions
+- **Internationalised** — 9 languages: en · de · es · fr · ga · gd · it · nl · pt
+- **Themeable** — CSS custom property (`--mmf-accent-color`) for your team's brand colour
+- **Dual caching** — In-memory + disk cache survives restarts
+- **Rate-limited** — Shared Request Manager prevents API throttling
+
+---
 
 ## Installation
 
-1. Navigate to your MagicMirror modules folder:
-   ```bash
-   cd ~/MagicMirror/modules
-   ```
-2. Clone or copy this module into `MMM-MyTeams-Fixtures`:
-
-   ```bash
-   git clone https://github.com/gitgitaway/MMM-MyTeams-Fixtures
-   ```
-3. Install dependencies
 ```bash
+cd ~/MagicMirror/modules
+git clone https://github.com/gitgitaway/MMM-MyTeams-Fixtures
+cd MMM-MyTeams-Fixtures
 npm install
 ```
 
-4. Add the config to ~/MagicMirror/config/config.js`
+---
 
-5. Restart MagicMirror.
+## Update
+
+```bash
+cd ~/MagicMirror/modules/MMM-MyTeams-Fixtures
+git pull
+npm install
+```
+
+---
 
 ## Configuration
-Add to your MagicMirror config.js:
-```javascript
 
+Add the module to `~/MagicMirror/config/config.js`:
+
+### Minimal Example
+
+```javascript
 {
   module: "MMM-MyTeams-Fixtures",
   position: "bottom_right",
   config: {
-    source: "api",
+    teamName: "Liverpool",
+    teamId: "133602",
+    leagueIds: ["4328", "4424", "4426"]
+  }
+}
+```
+
+### Full Example (Celtic FC)
+
+```javascript
+{
+  module: "MMM-MyTeams-Fixtures",
+  position: "bottom_right",
+  config: {
     teamName: "Celtic",
     teamId: "133647",
-    apiUrl: "https://www.thesportsdb.com/api/v1/json/3",
+    leagueIds: ["4330", "4364", "4363", "4888"],
+    uefaLeagueIds: ["4480", "4481", "5071"],
+
+    source: "api",
     season: "auto",
     fallbackSeason: "2025-2026",
     updateInterval: 10 * 60 * 1000,
-    requestTimeoutMs: 15000,
     maxFixtures: 12,
+
     showCompetition: true,
     showCountdown: true,
+    showFooter: true,
     defaultFilter: "all",
-    cacheTTL: 5 * 60 * 1000,
-    fallbackChain: true,
-    // Filtering helpers
-    scottishLeagueIds: ["4330", "4364", "4363", "4888"],
-    uefaLeagueIds: ["4480", "4481", "5071"],
-    // API fallback behavior
-    useSearchEventsFallback: true,
-    strictLeagueFiltering: true,
-    // Scrapers (used only as needed)
+
+    autoCycleFilters: true,
+    autoCycleIntervalMs: 20000,
+    cycleAll: true,
+    cycleHome: true,
+    cycleAway: true,
+
     scrapeFWP: true,
-    scrapeBBC: false,
-    scrapeLFOTV: false,
-    scrapeCFC: false,
-    scrapeSportsDB: false,
-    // Locale
+    strictLeagueFiltering: true,
+
+    accentColor: "#018749",
     locale: "en-GB",
-    // Debug
+    language: "en",
     debug: false
   }
 }
 ```
 
-## Options
+### Finding Your Team ID
+
+Visit [thesportsdb.com](https://www.thesportsdb.com/), search for your team, and read the ID from the URL:  
+`https://www.thesportsdb.com/team/`**133647**`-Celtic`
+
+See [documentation/FindingYourTeamID.md](documentation/FindingYourTeamID.md) for a full guide and common team/league ID tables.
+
+---
+
+## Config Options
+
 | Option | Type | Default | Description |
-|-------|------|---------|-------------|
-| source | string | "api" | Primary source: "api" or scrapers via fallbackChain |
-| teamName | string | "Celtic" | Team display name and used for some fallbacks |
-| teamId | string | "133647" | TheSportsDB team ID (Celtic Scotland) |
-| apiUrl | string | https://www.thesportsdb.com/api/v1/json/3 | API base URL |
-| season | string | "auto" | Season string (e.g., "2025-2026") or "auto" |
-| fallbackSeason | string | "2025-2026" | Secondary season for API fallback |
-| updateInterval | number | 600000 | Refresh interval in ms |
-| requestTimeoutMs | number | 15000 | Fetch timeout in ms |
-| maxFixtures | number | 10 | Max fixtures shown |
-| showCompetition | boolean | true | Show competition column |
-| showCountdown | boolean | true | Show countdown to each match |
-| defaultFilter | string | "all" | "all" | "domestic" | "european" | "home" | "away" |
-| cacheTTL | number | 300000 | Cache duration in ms |
-| fallbackChain | boolean | true | Try scrapers if API empty |
-| scottishLeagueIds | string[] | [4330,4364,4363,4888] | Allowed Scottish competition IDs |
-| uefaLeagueIds | string[] | [4480,4481,5071] | Allowed UEFA competition IDs |
-| useSearchEventsFallback | boolean | true | Try searchevents patterns if API returns no data |
-| strictLeagueFiltering | boolean | true | Enforce league IDs for filtering in API stage |
-| scrapeFWP | boolean | true | Enable FWP scraper (for supplement/fallback) |
-| scrapeBBC | boolean | true | Enable BBC scraper (fallback) |
-| scrapeLFOTV | boolean | true | Enable LiveFootballOnTV scraper (fallback) |
-| scrapeCFC | boolean | true | Enable Celtic FC site scraper (fallback) |
-| scrapeSportsDB | boolean | true | Enable TheSportsDB site scraper (fallback) |
-| locale | string | "en-GB" | Date/time formatting locale |
-| debug | boolean | false | Verbose logging |
+|--------|------|---------|-------------|
+| **`teamName`** | string | `"Celtic"` | Your team's name — used for display and scraper URL construction |
+| **`teamId`** | string | `"133647"` | TheSportsDB team ID — find at thesportsdb.com |
+| **`leagueIds`** | string[] | `["4330","4364","4363","4888"]` | Domestic league/cup IDs for your team *(defaults to Scottish)*  |
+| `uefaLeagueIds` | string[] | `["4480","4481","5071"]` | UEFA competition IDs (CL, EL, UECL) |
+| `source` | string | `"api"` | Primary source: `"api"` or scraper-only |
+| `apiUrl` | string | `"https://www.thesportsdb.com/api/v1/json/3"` | API base URL — must remain thesportsdb.com |
+| `season` | string | `"auto"` | Season string e.g. `"2025-2026"` or `"auto"` |
+| `fallbackSeason` | string | `"2025-2026"` | Secondary season tried if primary returns empty |
+| `updateInterval` | number | `600000` | Data refresh interval in ms (default: 10 min) |
+| `requestTimeoutMs` | number | `15000` | Per-request timeout in ms |
+| `maxFixtures` | number | `60` | Maximum number of fixtures to display |
+| `cacheTTL` | number | `300000` | Cache lifetime in ms (default: 5 min) |
+| `fallbackChain` | boolean | `true` | Try scrapers when API returns no data |
+| `useSearchEventsFallback` | boolean | `true` | Try `/searchevents.php` patterns if standard endpoints return empty |
+| `strictLeagueFiltering` | boolean | `true` | Enforce `leagueIds` whitelist; `false` = show all fixtures for the team |
+| `scrapeFWP` | boolean | `true` | Enable FootballWebPages supplement for away fixtures |
+| `scrapeBBC` | boolean | `false` | Enable BBC Sport scraper (full fallback) |
+| `scrapeLFOTV` | boolean | `false` | Enable LiveFootballOnTV scraper (full fallback) |
+| `scrapeCFC` | boolean | `false` | Enable team-official-site scraper (known clubs only) |
+| `scrapeSportsDB` | boolean | `false` | Enable TheSportsDB HTML scraper (full fallback) |
+| `showCompetition` | boolean | `true` | Show competition column in table |
+| `showCountdown` | boolean | `true` | Show `⏱ Xd Yh` countdown badge to next fixture |
+| `showFooter` | boolean | `true` | Show source/timestamp footer |
+| `defaultFilter` | string | `"all"` | Active filter on load: `"all"` \| `"domestic"` \| `"european"` \| `"home"` \| `"away"` |
+| `maxTableHeight` | number | `260` | Max height (px) of the scrollable fixture table |
+| `countdownIntervalMs` | number | `60000` | How often countdown badge refreshes (ms) |
+| `largeListThreshold` | number | `12` | Fixture count above which countdown refresh is throttled |
+| `largeListCountdownMultiplier` | number | `2` | Multiplier applied to `countdownIntervalMs` when list exceeds threshold |
+| `autoCycleFilters` | boolean | `false` | Auto-rotate through enabled filter views |
+| `autoCycleIntervalMs` | number | `20000` | Display duration per filter during auto-cycle (min 5000 ms) |
+| `cycleAll` | boolean | `true` | Include "All" in auto-cycle rotation |
+| `cycleHome` | boolean | `true` | Include "Home" in auto-cycle rotation |
+| `cycleAway` | boolean | `true` | Include "Away" in auto-cycle rotation |
+| `cycleDomestic` | boolean | `false` | Include "Domestic" in auto-cycle rotation |
+| `cycleEuropean` | boolean | `false` | Include "European" in auto-cycle rotation |
+| `locale` | string | `"en-GB"` | Locale for date/time formatting (e.g. `"de-DE"`, `"fr-FR"`) |
+| `language` | string | `"en"` | UI language code: `en` `de` `es` `fr` `ga` `gd` `it` `nl` `pt` |
+| `accentColor` | string | `"#018749"` | Team accent colour — sets `--mmf-accent-color` CSS variable |
+| `darkMode` | boolean\|null | `null` | `null` = auto, `true` = force dark, `false` = force light |
+| `fontColorOverride` | string\|null | `null` | Force text colour, e.g. `"#FFFFFF"` |
+| `opacityOverride` | number\|null | `null` | Force wrapper opacity `0.0`–`1.0` |
+| `teams` | array\|null | `null` | Multi-team mode — array of `{ label, teamName, teamId, leagueIds, uefaLeagueIds }` objects |
+| `enableAlerts` | boolean | `false` | Fire MagicMirror SHOW_ALERT notification before kick-off |
+| `alertBeforeMinutes` | number | `30` | Minutes before kick-off to send the alert |
+| `debug` | boolean | `false` | Verbose console logging for troubleshooting |
 
-## How data fetching works (plain language)
-1. The module asks the helper for fixtures. The helper first calls TheSportsDB: eventsnext (upcoming) and eventsseason (season list). It filters to Celtic matches and known leagues.
-2. If TheSportsDB returns only home games (common with free tier), the helper will check FootballWebPages for away games and merge them in (with date inference so they sort correctly). You’ll see "Source: api+fwp" in the footer when this happens.
-3. If everything is empty (rare), optional scrapers (BBC, LiveFootballOnTV, Celtic site, SportsDB site) can be tried in order if enabled.
-4. The front-end sorts and displays the merged list, and you can filter it with the buttons.
+> **Bold** options are the ones most users need to change. Everything else can be left at its default.
 
+---
+
+## Documentation
+
+Detailed guides are in the `documentation/` folder:
+
+| Guide | Contents |
+|-------|---------|
+| [HowThisModuleWorks.md](documentation/HowThisModuleWorks.md) | Architecture, data flow, caching, filtering, socket API |
+| [FindingYourTeamID.md](documentation/FindingYourTeamID.md) | TheSportsDB team and league ID lookup, common ID tables |
+| [CustomisingTheDisplay.md](documentation/CustomisingTheDisplay.md) | CSS custom properties, theming, column options, `customOverrides.css` |
+| [MultiTeamAndAlerts-Guide.md](documentation/MultiTeamAndAlerts-Guide.md) | Multi-team switcher setup, pre-match alert config |
+| [LanguageAndTranslation-Guide.md](documentation/LanguageAndTranslation-Guide.md) | Supported languages, adding a new translation |
+| [AccessibilityFeatures-Guide.md](documentation/AccessibilityFeatures-Guide.md) | ARIA implementation, keyboard navigation, screen reader support |
+| [Troubleshooting.md](documentation/Troubleshooting.md) | Common issues, debug log reference, fixes |
+| [SHARED_REQUEST_MANAGER.md](documentation/SHARED_REQUEST_MANAGER.md) | HTTP queue, rate limiting, retry logic internals |
+| [football-teams-database.csv](data/football_teams_database.csv) | Quick way to find your teams Sports DB id codes |
+---
 
 ## Dependencies
-- MagicMirror² (runtime)
-- Node.js 18+
-- npm packages: cheerio, node-fetch (or global fetch in Node 18), fs (built-in)
 
-## To Do
-- [x] Supplement API data with FWP to include away fixtures
-- [x] Add robust debug logging and cache metadata
-- [ ] Add logo mapping for more clubs and competitions
-- [ ] Add per-league toggle to hide specific competitions
+| Dependency | Version | Purpose |
+|-----------|---------|---------|
+| MagicMirror² | ≥ 2.x | Runtime environment |
+| Node.js | ≥ 18 | Native `fetch`; or Node 16 + `node-fetch@2` |
+| cheerio | ^1.1.2 | HTML parsing for web scrapers |
+| node-fetch | ^2.7.0 | HTTP fallback for Node < 18 |
 
-This id the 3rd module in my Celtic themed man cave magicmirror.  
-- ![Screenshot 1](./screenshots/CelticMM-Screenshot.png)
+Install:
+```bash
+cd ~/MagicMirror/modules/MMM-MyTeams-Fixtures && npm install
+```
 
- The other modules can be found here:- 
-- Module 1: MyTeams-Clock  https://github.com/gitgitaway/MMM-MyTeams-Clock
-- Module 2: MyTeams-Clock  https://github.com/gitgitaway/MMM-MyTeams-LeagueTable
-- Module 4: MyTeams-Clock  https://github.com/gitgitaway/MMM-JukeBox
 ---
-## Acknowledgments
-Thanks to the MagicMirror community for inspiration and guidance! Special thanks to @jclarke0000 for his work on MMM-MyScoreboard which served as a starting point. 
 
+## Related Modules — The MyTeams Suite
+
+This is module 3 in the MyTeams MagicMirror collection:
+
+| Module | Description |
+|--------|-------------|
+| [MMM-MyTeams-Clock](https://github.com/gitgitaway/MMM-MyTeams-Clock) | Team-branded clock |
+| [MMM-MyTeams-LeagueTable](https://github.com/gitgitaway/MMM-MyTeams-LeagueTable) | League standings table |
+| **MMM-MyTeams-Fixtures** | Upcoming fixtures *(this module)* |
+| [MMM-JukeBox](https://github.com/gitgitaway/MMM-JukeBox) | Audio player |
+
+---
+
+## Contributing
+
+Contributions are welcome!
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m 'Add my feature'`
+4. Push: `git push origin feature/my-feature`
+5. Open a Pull Request
+
+Please:
+- Follow the existing code style
+- Test with multiple teams and sources
+- Update the relevant documentation file if adding new config options
+- Add translation keys to all 9 locale files if adding new UI strings
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history of changes.
+
+**Current version: 1.3.0** — Full security, performance, accessibility and UX review cycle.
+
+---
+
+## Acknowledgments
+
+- **@jclarke0000** — MMM-MyScoreboard served as early inspiration
+- **[TheSportsDB](https://www.thesportsdb.com/)** — Free football data API
+- **[FootballWebPages](https://www.footballwebpages.co.uk/)** — Away fixture supplement
+- **MagicMirror² Community** — Guidance, feedback, and support
+
+---
 
 ## License
 
-MIT
-
+[MIT](LICENSE) — © gitgitaway

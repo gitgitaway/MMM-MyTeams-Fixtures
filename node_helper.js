@@ -8,7 +8,8 @@
  * - Rate limiting + retry/backoff for API
  * - Memory + disk cache
  */
-
+const SharedRequestManager = require("./shared-request-manager.js");
+const requestManager = SharedRequestManager.getInstance();
 const NodeHelper = require("node_helper");
 
 // Prefer native fetch (Node 18+), fallback to node-fetch v2
@@ -42,6 +43,17 @@ const fetchInitialized = initializeFetch();
 const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
+
+const EXPECTED_MODULE_DIR = "MMM-MyTeams-Fixtures";
+const ACTUAL_MODULE_DIR = path.basename(__dirname);
+if (ACTUAL_MODULE_DIR !== EXPECTED_MODULE_DIR) {
+  console.error(
+    `[MMM-MyTeams-Fixtures] FATAL: node_helper.js is running from the wrong directory!\n` +
+    `  Expected: ${EXPECTED_MODULE_DIR}\n` +
+    `  Got:      ${ACTUAL_MODULE_DIR}\n` +
+    `  This usually means the wrong node_helper.js was installed. Re-clone the module from GitHub.`
+  );
+}
 
 const CACHE_FILE = path.join(__dirname, "fixtures-cache.json");
 let cache = {
@@ -92,11 +104,9 @@ function saveCacheToDisk(ttl) {
   }
 }
 
-// Generic fetch with timeout and headers
+// Generic fetch with timeout and headers - NOW USES SHARED REQUEST MANAGER
 async function doFetch(url, options = {}, timeoutMs = 15000) {
   if (!_fetchImpl) throw new Error(`Fetch not available (${_fetchType})`);
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  let timer = null;
 
   const fetchOptions = {
     ...options,
@@ -107,23 +117,32 @@ async function doFetch(url, options = {}, timeoutMs = 15000) {
       ...(options.headers || {})
     }
   };
-  if (controller) fetchOptions.signal = controller.signal;
 
   try {
-    if (controller) {
-      timer = setTimeout(() => controller.abort(), timeoutMs);
+    const result = await requestManager.queueRequest({
+      url: url,
+      options: fetchOptions,
+      timeout: timeoutMs,
+      priority: 0,  // High priority - fixtures load first
+      moduleId: 'MMM-MyTeams-Fixtures',
+      deduplicate: true
+    });
+
+    if (!result.success) {
+      throw new Error(`HTTP ${result.status}: Request failed`);
     }
-    const res = await _fetchImpl(url, fetchOptions);
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    return res;
+
+    return {
+      ok: true,
+      status: result.status,
+      json: async () => typeof result.data === 'string' ? JSON.parse(result.data) : result.data,
+      text: async () => typeof result.data === 'string' ? result.data : JSON.stringify(result.data)
+    };
   } catch (err) {
     if (err.name === "AbortError") throw new Error(`Request timeout after ${timeoutMs}ms`);
     throw err;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
-
 // Helpers: throttle and retry for TheSportsDB free tier
 const MIN_API_INTERVAL_MS = 1200;
 let lastApiAt = 0;
@@ -167,8 +186,8 @@ function classifyCompetition(name) {
   ];
   if (euroTokens.some(tok => n.includes(tok))) return "european";
   if (n.includes("friendly") || n.includes("pre-season")) return "friendly";
-  // Scottish domestic markers (helps when idLeague is missing)
-  if (/(scottish|spfl|premiership|league cup|viaplay|premier sports)/i.test(n)) return "domestic";
+  // Domestic league markers (helps when idLeague is missing)
+  if (/(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(n)) return "domestic";
   return "domestic";
 }
 
@@ -261,7 +280,7 @@ function resolveSeasonAuto(now = new Date()) {
   return `${y - 1}-${y}`;
 }
 
-// Resolve team ID via /searchteams.php if needed (prefers Scotland-based Celtic)
+// Resolve team ID via /searchteams.php if needed (uses generic scoring for any team)
 async function resolveTeamIdIfNeeded(apiUrl, teamName, providedTeamId, timeoutMs, debug = false) {
   const safeId = String(providedTeamId || "").trim();
   if (safeId) return safeId;
@@ -273,7 +292,7 @@ async function resolveTeamIdIfNeeded(apiUrl, teamName, providedTeamId, timeoutMs
   const teams = Array.isArray(data?.teams) ? data.teams : [];
   if (!teams.length) throw new Error("Team ID resolution failed (no candidates)");
 
-  // Score candidates
+  // Score candidates - generic scoring that works for any team
   const lname = teamName.toLowerCase();
   const scored = teams.map(t => {
     const name = (t?.strTeam || "").toLowerCase();
@@ -282,12 +301,14 @@ async function resolveTeamIdIfNeeded(apiUrl, teamName, providedTeamId, timeoutMs
     const city = (t?.strStadiumLocation || "").toLowerCase();
     const id = String(t?.idTeam || "");
     let score = 0;
+    // Exact match gets highest score
     if (name === lname) score += 100;
-    if (name.includes("celtic") && lname.includes("celtic")) score += 20;
-    if (alt.includes("celtic fc") || alt.includes("glasgow celtic")) score += 20;
-    if (country === "scotland") score += 50;
-    if (city.includes("glasgow")) score += 15;
-    if (id === "133739") score += 200; // prefer known Celtic FC id
+    // Partial match in team name
+    if (name.includes(lname)) score += 50;
+    // Partial match in alternate name
+    if (alt.includes(lname)) score += 40;
+    // If provided teamId matches, strongly prefer it
+    if (providedTeamId && id === String(providedTeamId)) score += 200;
     return { t, score };
   }).sort((a,b) => b.score - a.score);
 
@@ -311,7 +332,7 @@ async function resolveTeamIdByName(apiUrl, teamName, timeoutMs) {
 }
 
 // Convert TheSportsDB event into front-end fixture shape
-function toFixtureFromEvent(e, celticName = "Celtic") {
+function toFixtureFromEvent(e, teamName = "Celtic") {
   const home = e?.strHomeTeam || "";
   const away = e?.strAwayTeam || "";
   const league = e?.strLeague || "";
@@ -319,10 +340,10 @@ function toFixtureFromEvent(e, celticName = "Celtic") {
 
   let opponent = "";
   let homeAway = null;
-  if (home.toLowerCase().includes(celticName.toLowerCase())) {
+  if (home.toLowerCase().includes(teamName.toLowerCase())) {
     opponent = away || "TBD";
     homeAway = "H";
-  } else if (away.toLowerCase().includes(celticName.toLowerCase())) {
+  } else if (away.toLowerCase().includes(teamName.toLowerCase())) {
     opponent = home || "TBD";
     homeAway = "A";
   } else {
@@ -345,7 +366,10 @@ function toFixtureFromEvent(e, celticName = "Celtic") {
     homeAway,
     competition: league || "",
     competitionType: classifyCompetition(league),
-    tv: tv || ""
+    tv: tv || "",
+    status: e?.strStatus || null,
+    homeScore: (e?.intHomeScore != null && e.intHomeScore !== "") ? Number(e.intHomeScore) : null,
+    awayScore: (e?.intAwayScore != null && e.intAwayScore !== "") ? Number(e.intAwayScore) : null
   };
 }
 
@@ -358,7 +382,7 @@ async function getFixturesFromAPI({
   fallbackSeason,
   requestTimeoutMs = 20000,
   maxFixtures = 24,
-  scottishLeagueIds = [],
+ leagueIds = [],
   uefaLeagueIds = [],
   useSearchEventsFallback = true,
   strictLeagueFiltering = false,
@@ -392,11 +416,11 @@ async function getFixturesFromAPI({
       const isHome = idHome === String(resolvedTeamId);
       const isAway = idAway === String(resolvedTeamId);
       const isTeamMatch = isHome || isAway;
-      const knownScottish = /(scottish|spfl|premiership|league cup|viaplay|premier sports)/i.test(leagueName);
+      const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
       const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
       const leagueOk = strictLeagueFiltering
-        ? (scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA)
-        : (!leagueId || scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA);
+        ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
+        : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
       // Always keep clear away matches; apply league filter more leniently for away if metadata is weak
       const keep = isTeamMatch && (leagueOk || (isAway && (!leagueId && !leagueName)));
       return keep;
@@ -425,16 +449,30 @@ async function getFixturesFromAPI({
     });
 
     let collected = filteredEvents.map(e => toFixtureFromEvent(e, teamName));
+    
+    if (debug) {
+      const awayFromNext = collected.filter(f => f.homeAway === 'A').length;
+      console.log(`[MyTeams:helper] ✓ eventsnext.php returned ${collected.length} fixtures (${awayFromNext} away)`);
+    }
+    
     // If we don't have enough from "next", supplement from season lists
     if (collected.length < maxFixtures) {
       try {
         const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
         const fallbackStr = fallbackSeason || resolveSeasonAuto();
         const more1 = await fetchSeason(seasonStr);
-        if (Array.isArray(more1) && more1.length) collected.push(...more1);
+        if (Array.isArray(more1) && more1.length) {
+          const awayFromSeason = more1.filter(f => f.homeAway === 'A').length;
+          if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${seasonStr}) returned ${more1.length} fixtures (${awayFromSeason} away)`);
+          collected.push(...more1);
+        }
         if (collected.length < maxFixtures) {
           const more2 = await fetchSeason(fallbackStr);
-          if (Array.isArray(more2) && more2.length) collected.push(...more2);
+          if (Array.isArray(more2) && more2.length) {
+            const awayFromFallback = more2.filter(f => f.homeAway === 'A').length;
+            if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${fallbackStr}) returned ${more2.length} fixtures (${awayFromFallback} away)`);
+            collected.push(...more2);
+          }
         }
       } catch (_) { /* ignore supplement errors */ }
       // Dedupe by composite key
@@ -451,7 +489,11 @@ async function getFixturesFromAPI({
       const tb = Date.parse(`${b.date || '9999-12-31'}T${(b.timeText || '23:59')}:00`);
       return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
     });
-    if (collected.length > 0) return collected.slice(0, maxFixtures);
+    if (collected.length > 0) {
+      const totalAway = collected.slice(0, maxFixtures).filter(f => f.homeAway === 'A').length;
+      if (debug) console.log(`[MyTeams:helper] ✓ FINAL from eventsnext+eventsseason: ${collected.length} fixtures (${totalAway} away) - RETURNING`);
+      return collected.slice(0, maxFixtures);
+    }
   } catch (e) {
     console.warn("[MyTeams:helper] Next-events fetch failed:", e.message);
   }
@@ -460,8 +502,10 @@ async function getFixturesFromAPI({
   const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
   const fallbackStr = fallbackSeason || resolveSeasonAuto();
 
-  async function fetchSeason(s) {
-    const url = `${apiUrl}/eventsseason.php?id=${encodeURIComponent(resolvedTeamId)}&s=${encodeURIComponent(s)}`;
+  // PERF-005: accepts optional idOverride so fetchSeasonAlt (alt-team-id path) can reuse this function
+  async function fetchSeason(s, idOverride) {
+    const id = idOverride !== undefined ? String(idOverride) : String(resolvedTeamId);
+    const url = `${apiUrl}/eventsseason.php?id=${encodeURIComponent(id)}&s=${encodeURIComponent(s)}`;
     if (debug) console.log("[MyTeams:helper] API GET", url);
     const res = await apiFetchWithRetry(url, {}, requestTimeoutMs);
     const data = await res.json();
@@ -470,8 +514,8 @@ async function getFixturesFromAPI({
 
     if (debug) {
       const total = events.length;
-      const h = events.filter(e => String(e?.idHomeTeam||"") === String(resolvedTeamId)).length;
-      const a = events.filter(e => String(e?.idAwayTeam||"") === String(resolvedTeamId)).length;
+      const h = events.filter(e => String(e?.idHomeTeam||"") === id).length;
+      const a = events.filter(e => String(e?.idAwayTeam||"") === id).length;
       console.log(`[MyTeams:helper] Season-events(${s}): total=${total}, home=${h}, away=${a}`);
     }
 
@@ -481,14 +525,14 @@ async function getFixturesFromAPI({
       const idAway = String(e?.idAwayTeam || "");
       const leagueId = String(e?.idLeague || "");
       const leagueName = (e?.strLeague || "").toLowerCase();
-      const isHome = idHome === String(resolvedTeamId);
-      const isAway = idAway === String(resolvedTeamId);
+      const isHome = idHome === id;
+      const isAway = idAway === id;
       const isTeamMatch = isHome || isAway;
-      const knownScottish = /(scottish|spfl|premiership|league cup|viaplay|premier sports)/i.test(leagueName);
+      const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
       const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
       const leagueOk = strictLeagueFiltering
-        ? (scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA)
-        : (!leagueId || scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA);
+        ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
+        : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
       const keep = isTeamMatch && (leagueOk || (isAway && (!leagueId && !leagueName)));
       return keep && (e?.dateEvent || "") >= todayISO;
     });
@@ -496,7 +540,7 @@ async function getFixturesFromAPI({
       desired = events.filter(e => {
         const idHome = String(e?.idHomeTeam || "");
         const idAway = String(e?.idAwayTeam || "");
-        return (idHome === String(resolvedTeamId) || idAway === String(resolvedTeamId)) && (e?.dateEvent || "") >= todayISO;
+        return (idHome === id || idAway === id) && (e?.dateEvent || "") >= todayISO;
       });
     }
 
@@ -512,14 +556,22 @@ async function getFixturesFromAPI({
 
   try {
     const seasonFixtures = await fetchSeason(seasonStr);
-    if (seasonFixtures.length > 0) return seasonFixtures;
+    if (seasonFixtures.length > 0) {
+      const awayCount = seasonFixtures.filter(f => f.homeAway === 'A').length;
+      if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${seasonStr}) standalone returned ${seasonFixtures.length} fixtures (${awayCount} away) - RETURNING`);
+      return seasonFixtures;
+    }
   } catch (e) {
     console.warn(`[MyTeams:helper] Season (${seasonStr}) fetch failed:`, e.message);
   }
 
   try {
     const fbFixtures = await fetchSeason(fallbackStr);
-    if (fbFixtures.length > 0) return fbFixtures;
+    if (fbFixtures.length > 0) {
+      const awayCount = fbFixtures.filter(f => f.homeAway === 'A').length;
+      if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${fallbackStr}) fallback returned ${fbFixtures.length} fixtures (${awayCount} away) - RETURNING`);
+      return fbFixtures;
+    }
   } catch (e) {
     console.warn(`[MyTeams:helper] Fallback season (${fallbackStr}) fetch failed:`, e.message);
   }
@@ -565,11 +617,11 @@ async function getFixturesFromAPI({
         const isAway = away.includes(t);
         const leagueId = String(e?.idLeague || "");
         const leagueName = (e?.strLeague || "").toLowerCase();
-        const knownScottish = /(scottish|spfl|premiership|league cup|viaplay|premier sports)/i.test(leagueName);
+        const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
         const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
         const keepLeague = strictLeagueFiltering
-          ? (scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA)
-          : (!leagueId || scottishLeagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownScottish || knownUEFA);
+          ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
+          : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
         return involved && (keepLeague || (isAway && (!leagueId && !leagueName))) && (e?.dateEvent || "") >= todayISO;
       });
       if (desired.length === 0 && !strictLeagueFiltering) {
@@ -585,7 +637,11 @@ async function getFixturesFromAPI({
         return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
       });
       const fx = desired.map(e => toFixtureFromEvent(e, teamName)).slice(0, maxFixtures);
-      if (fx.length > 0) return fx;
+      if (fx.length > 0) {
+        const awayCount = fx.filter(f => f.homeAway === 'A').length;
+        if (debug) console.log(`[MyTeams:helper] ✓ searchevents.php returned ${fx.length} fixtures (${awayCount} away) - RETURNING`);
+        return fx;
+      }
     } catch (e) {
       console.warn("[MyTeams:helper] searchevents fallback failed:", e.message);
     }
@@ -617,35 +673,15 @@ async function getFixturesFromAPI({
           console.warn("[MyTeams:helper] Next-events altId fetch failed:", e.message);
         }
 
-        // Step B: /eventsseason.php for altId
-        async function fetchSeasonAlt(s) {
-          const url = `${apiUrl}/eventsseason.php?id=${encodeURIComponent(altId)}&s=${encodeURIComponent(s)}`;
-          if (debug) console.log("[MyTeams:helper] API GET", url);
-          const res = await apiFetchWithRetry(url, {}, requestTimeoutMs);
-          const data = await res.json();
-          const events = Array.isArray(data?.events) ? data.events : [];
-          const todayISO = new Date().toISOString().slice(0,10);
-          let desired = events.filter(e => {
-            const idHome = String(e?.idHomeTeam || "");
-            const idAway = String(e?.idAwayTeam || "");
-            return (idHome === String(altId) || idAway === String(altId)) && (e?.dateEvent || "") >= todayISO;
-          });
-          desired.sort((a,b) => {
-            const ta = Date.parse(a?.strTimestamp || `${a?.dateEvent || '9999-12-31'}T${(a?.strTime || '23:59')}:00`);
-            const tb = Date.parse(b?.strTimestamp || `${b?.dateEvent || '9999-12-31'}T${(b?.strTime || '23:59')}:00`);
-            return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-          });
-          return desired.map(e => toFixtureFromEvent(e, teamName)).slice(0, maxFixtures);
-        }
-
+        // Step B: /eventsseason.php for altId — reuses fetchSeason with idOverride (PERF-005)
         try {
-          const sfx = await fetchSeasonAlt(seasonStr);
+          const sfx = await fetchSeason(seasonStr, altId);
           if (sfx.length > 0) return sfx;
         } catch (e) {
           console.warn(`[MyTeams:helper] Season (alt, ${seasonStr}) fetch failed:`, e.message);
         }
         try {
-          const sfx2 = await fetchSeasonAlt(fallbackStr);
+          const sfx2 = await fetchSeason(fallbackStr, altId);
           if (sfx2.length > 0) return sfx2;
         } catch (e) {
           console.warn(`[MyTeams:helper] Fallback season (alt, ${fallbackStr}) fetch failed:`, e.message);
@@ -664,18 +700,43 @@ async function getFixturesFromAPI({
  * ---------------------------
  */
 
-const SOURCES = {
-  fwp: "https://www.footballwebpages.co.uk/celtic/fixtures-results",
-/*  livefootballontv: "https://www.live-footballontv.com/celtic-on-tv.html",
-  bbc: "https://www.bbc.co.uk/sport/football/teams/celtic/scores-fixtures",
-   sportsdb: "https://www.thesportsdb.com/team/133647-celtic",
-  cfc: "https://www.celticfc.com/fixtures" */
-};
+// SEC-002: Validate teamName contains only safe characters before embedding in URLs
+function sanitizeTeamName(name) {
+  if (typeof name !== "string" || !name.trim()) return null;
+  // Allow letters (including Unicode/accented), digits, spaces, hyphens, apostrophes, dots, & only
+  if (!/^[\p{L}\p{N}\s'\-\.&]+$/u.test(name.trim())) return null;
+  return name.trim();
+}
+
+// Known clubs whose official site follows the <slug>fc.com pattern
+const KNOWN_CFC_SLUGS = new Set([
+  "celtic", "rangers", "chelsea", "arsenal", "liverpool", "everton",
+  "newcastle", "barcelona", "ajax", "porto", "benfica"
+]);
+
+// Dynamic URL builder for scrapers - uses teamName and teamId from config
+function buildScraperUrls(teamName, teamId) {
+  const safe = sanitizeTeamName(teamName);
+  if (!safe) {
+    console.error(`[MyTeams:helper] SEC-002: teamName "${teamName}" contains unsafe characters — scraper URLs blocked`);
+    return { fwp: null, livefootballontv: null, bbc: null, sportsdb: null, cfc: null };
+  }
+  const slug = safe.toLowerCase().replace(/\s+/g, "-");
+  const safeId = String(teamId || "133647").replace(/[^0-9a-zA-Z\-_]/g, "");
+  return {
+    fwp: `https://www.footballwebpages.co.uk/${encodeURIComponent(slug)}/fixtures-results`,
+    livefootballontv: `https://www.live-footballontv.com/${encodeURIComponent(slug)}-on-tv.html`,
+    bbc: `https://www.bbc.co.uk/sport/football/teams/${encodeURIComponent(slug)}/scores-fixtures`,
+    sportsdb: `https://www.thesportsdb.com/team/${encodeURIComponent(safeId)}-${encodeURIComponent(slug)}`,
+    cfc: KNOWN_CFC_SLUGS.has(slug) ? `https://www.${slug}fc.com/fixtures` : null
+  };
+}
 
 // Live-FootballOnTV HTML parser
-function parseLiveFootball(html) {
+function parseLiveFootball(html, teamName = "Celtic") {
   const $ = cheerio.load(html);
   const fixtures = [];
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
   $(".match, .fixture, .upcoming .row, .w-row").each((_, el) => {
     let dateText = $(el).find(".date, .fixture-date, .match-date").first().text().trim();
     let timeText = $(el).find(".time, .kickoff, .ko").first().text().trim();
@@ -713,8 +774,8 @@ function parseLiveFootball(html) {
     }
 
     let opponent = null, homeAway = null;
-    const vs1 = allText.match(/celtic\s+v(?:s\.)?\s+([^|@(\-]+)$/i);
-    const vs2 = allText.match(/([^|@(\-]+)\s+v(?:s\.)?\s+celtic/i);
+    const vs1 = allText.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
+    const vs2 = allText.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
     if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
     else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
 
@@ -744,9 +805,10 @@ function parseLiveFootball(html) {
 }
 
 // BBC HTML parser
-function parseBBC(html) {
+function parseBBC(html, teamName = "Celtic") {
   const $ = cheerio.load(html);
   const fixtures = [];
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
   $("[data-component='fixtures'] li, .sp-c-fixture").each((_, el) => {
     const timeEl = $(el).find("time").first();
     const datetimeAttr = (timeEl.attr("datetime") || "").trim();
@@ -758,8 +820,8 @@ function parseBBC(html) {
     const away = $(el).find(".sp-c-fixture__team--away .sp-c-fixture__team-name, .sp-c-fixture__team--away .qa-full-team-name").text().trim();
 
     let opponent = null; let homeAway = null;
-    if (/^celtic$/i.test(home)) { opponent = away; homeAway = "H"; }
-    else if (/^celtic$/i.test(away)) { opponent = home; homeAway = "A"; }
+    if (new RegExp(`^${teamPattern}$`, 'i').test(home)) { opponent = away; homeAway = "H"; }
+    else if (new RegExp(`^${teamPattern}$`, 'i').test(away)) { opponent = home; homeAway = "A"; }
 
     let iso = null;
     if (/^\d{4}-\d{2}-\d{2}/.test(datetimeAttr)) iso = datetimeAttr;
@@ -816,9 +878,10 @@ function parseBBC(html) {
 }
 
 // FootballWebPages HTML parser
-function parseFWP(html, debug = false) {
+function parseFWP(html, teamName = "Celtic", debug = false) {
   const $ = cheerio.load(html);
   const fixtures = [];
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
   $(".fixture, .fixtures .match, table tr").each((i, el) => {
     let dateText = $(el).find(".date, .fixture-date, td.date, time").first().text().trim();
     let timeText = $(el).find(".time, td.time").first().text().trim();
@@ -855,19 +918,20 @@ function parseFWP(html, debug = false) {
       }
     }
 
-    // Extract teams from generic "A v B" pattern and infer H/A for Celtic
+    // Extract teams from generic "A v B" pattern and infer H/A for configured team
     let opponent = null; let homeAway = null;
     const teamPair = allText.match(/([A-Za-z0-9 .&'\-]+)\s+v(?:s\.?)*\s+([A-Za-z0-9 .&'\-]+)/i);
     if (teamPair) {
       const t1 = teamPair[1].trim();
       const t2 = teamPair[2].trim();
-      if (/celtic/i.test(t1) && !/celtic/i.test(t2)) { opponent = sanitizeOpponent(t2); homeAway = "H"; }
-      else if (/celtic/i.test(t2) && !/celtic/i.test(t1)) { opponent = sanitizeOpponent(t1); homeAway = "A"; }
+      const teamRegex = new RegExp(teamPattern, 'i');
+      if (teamRegex.test(t1) && !teamRegex.test(t2)) { opponent = sanitizeOpponent(t2); homeAway = "H"; }
+      else if (teamRegex.test(t2) && !teamRegex.test(t1)) { opponent = sanitizeOpponent(t1); homeAway = "A"; }
     }
     // Fallback specific patterns without end-of-line constraint
     if (!opponent) {
-      const vs1 = allText.match(/celtic\s+v(?:s\.)?\s+([^|@\-(]+)/i);
-      const vs2 = allText.match(/([^|@\-(]+)\s+v(?:s\.)?\s+celtic/i);
+      const vs1 = allText.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@\\-(]+)`, 'i'));
+      const vs2 = allText.match(new RegExp(`([^|@\\-(]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
       if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
       else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
     }
@@ -883,28 +947,30 @@ function parseFWP(html, debug = false) {
     // Heuristic: use anchor texts for opponent if present
     if (!opponent) {
       const links = $(el).find('a').map((_, a) => $(a).text().replace(/\s+/g,' ').trim()).get();
-      const cand = (links || []).find(t => t && /[A-Za-z]/.test(t) && !/celtic/i.test(t) && !/fixtures|results|table|news/i.test(t));
+      const teamRegex = new RegExp(teamPattern, 'i');
+      const cand = (links || []).find(t => t && /[A-Za-z]/.test(t) && !teamRegex.test(t) && !/fixtures|results|table|news/i.test(t));
       if (cand) {
         opponent = sanitizeOpponent(cand);
         // Infer H/A by order of appearance in the row text
-        const idxC = allText.toLowerCase().indexOf('celtic');
+        const idxC = allText.toLowerCase().indexOf(teamName.toLowerCase());
         const idxO = allText.toLowerCase().indexOf(cand.toLowerCase());
         if (idxC >= 0 && idxO >= 0) homeAway = idxC < idxO ? 'H' : 'A';
       }
     }
-    // Heuristic: if still empty, try tokens near 'Celtic'
+    // Heuristic: if still empty, try tokens near configured team
     if (!opponent) {
-      const mAfter = allText.match(/celtic[^A-Za-z0-9]+([^,|@\-\(]{2,40})/i);
-      const mBefore = allText.match(/([^,|@\-\(]{2,40})[^A-Za-z0-9]+celtic/i);
-      if (mAfter && !/celtic/i.test(mAfter[1])) { opponent = sanitizeOpponent(mAfter[1]); homeAway = 'H'; }
-      else if (mBefore && !/celtic/i.test(mBefore[1])) { opponent = sanitizeOpponent(mBefore[1]); homeAway = 'A'; }
+      const mAfter = allText.match(new RegExp(`${teamPattern}[^A-Za-z0-9]+([^,|@\\-\\(]{2,40})`, 'i'));
+      const mBefore = allText.match(new RegExp(`([^,|@\\-\\(]{2,40})[^A-Za-z0-9]+${teamPattern}`, 'i'));
+      const teamRegex = new RegExp(teamPattern, 'i');
+      if (mAfter && !teamRegex.test(mAfter[1])) { opponent = sanitizeOpponent(mAfter[1]); homeAway = 'H'; }
+      else if (mBefore && !teamRegex.test(mBefore[1])) { opponent = sanitizeOpponent(mBefore[1]); homeAway = 'A'; }
     }
 
     // Skip past results by detecting scores or FT markers
     const isResult = /\b\d+\s*-\s*\d+\b/.test(allText) || /\bFT\b/i.test(allText) || /Full\s*Time/i.test(allText);
 
     if (!isResult && (opponent || dateText || timeText)) {
-      // Force 17:45 for European away matches (Celtic Park time)
+      // Force 17:45 for European away matches (UK local time)
       if ((!timeText || !/^[0-2]?\d:\d{2}$/.test(timeText)) && classifyCompetition(comp) === 'european' && homeAway === 'A') {
         timeText = '17:45';
       } else if (classifyCompetition(comp) === 'european' && homeAway === 'A' && /(am|pm)$/i.test(timeText)) {
@@ -934,12 +1000,14 @@ function parseFWP(html, debug = false) {
 }
 
 // TheSportsDB team page (site) parser
-function parseSportsDB(html) {
+function parseSportsDB(html, teamName = "Celtic") {
   const $ = cheerio.load(html);
   const fixtures = [];
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
+  const teamRegex = new RegExp(teamPattern, 'i');
   $("*").each((_, el) => {
     const block = $(el).text().replace(/\s+/g, " ").trim();
-    if (!/celtic/i.test(block) || !/v(?:s\.)?/i.test(block)) return;
+    if (!teamRegex.test(block) || !/v(?:s\.)?/i.test(block)) return;
 
     let { dateText, timeText } = extractDateTimeFallback(block);
     // Normalize/repair time as per FWP
@@ -966,8 +1034,8 @@ function parseSportsDB(html) {
     }
 
     let opponent = null, homeAway = null;
-    const vs1 = block.match(/celtic\s+v(?:s\.)?\s+([^|@(\-]+)$/i);
-    const vs2 = block.match(/([^|@(\-]+)\s+v(?:s\.)?\s+celtic/i);
+    const vs1 = block.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
+    const vs2 = block.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
     if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
     else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
 
@@ -997,13 +1065,15 @@ function parseSportsDB(html) {
   return fixtures.slice(0, 12);
 }
 
-// Celtic site generic parser
-function parseCFC(html) {
+// Team site generic parser (e.g., celticfc.com, rangersfc.com, etc.)
+function parseCFC(html, teamName = "Celtic") {
   const $ = cheerio.load(html);
   const fixtures = [];
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
+  const teamRegex = new RegExp(teamPattern, 'i');
   $("*").each((_, el) => {
     const block = $(el).text().replace(/\s+/g, " ").trim();
-    if (!/celtic/i.test(block) || !/v(?:s\.)?/i.test(block)) return;
+    if (!teamRegex.test(block) || !/v(?:s\.)?/i.test(block)) return;
 
     let { dateText, timeText } = extractDateTimeFallback(block);
     // Normalize time as per FWP
@@ -1031,8 +1101,8 @@ function parseCFC(html) {
 
     let opponent = null, homeAway = null;
 
-    const vs1 = block.match(/celtic\s+v(?:s\.)?\s+([^|@(\-]+)$/i);
-    const vs2 = block.match(/([^|@(\-]+)\s+v(?:s\.)?\s+celtic/i);
+    const vs1 = block.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
+    const vs2 = block.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
     if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
     else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
 
@@ -1063,25 +1133,30 @@ function parseCFC(html) {
 }
 
 // Fetch + parse for a given scraper source
-async function fetchAndParseScraper(sourceKey, timeoutMs, debug = false) {
+async function fetchAndParseScraper(sourceKey, teamName, teamId, timeoutMs, debug = false) {
   const src = String(sourceKey || "").toLowerCase().trim();
   const mapKey = (src === "lfotv" || src === "livefootballontv") ? "livefootballontv" : src;
-  const url = SOURCES[mapKey] || SOURCES.livefootballontv;
+  
+  // Build dynamic URLs based on teamName and teamId
+  const dynamicUrls = buildScraperUrls(teamName, teamId);
+  const url = dynamicUrls[mapKey] || dynamicUrls.fwp;
+
+  if (!url) throw new Error(`[MyTeams:helper] SEC-002: scraper URL for "${mapKey}" is blocked (unsafe teamName)`);
 
   const res = await doFetch(url, {}, timeoutMs);
   const html = await res.text();
 
   switch (mapKey) {
-    case "fwp": default: return parseFWP(html, debug);
-    case "bbc": return parseBBC(html);
-    case "cfc": return parseCFC(html);
-    case "sportsdb": return parseSportsDB(html);
-    case "livefootballontv": return parseLiveFootball(html);
+    case "fwp": default: return parseFWP(html, teamName, debug);
+    case "bbc": return parseBBC(html, teamName);
+    case "cfc": return parseCFC(html, teamName);
+    case "sportsdb": return parseSportsDB(html, teamName);
+    case "livefootballontv": return parseLiveFootball(html, teamName);
   }
 }
 
 // Try secondary sources in order if enabled
-async function tryScrapersInOrder(flags, timeoutMs, debug) {
+async function tryScrapersInOrder(flags, teamName, teamId, timeoutMs, debug) {
   const order = [];
   // Prefer FWP first as requested
   if (flags.scrapeFWP) order.push("fwp");
@@ -1092,7 +1167,7 @@ async function tryScrapersInOrder(flags, timeoutMs, debug) {
 
   for (const src of order) {
     try {
-      const list = await fetchAndParseScraper(src, timeoutMs, debug);
+      const list = await fetchAndParseScraper(src, teamName, teamId, timeoutMs, debug);
       if (Array.isArray(list) && list.length) {
         if (debug) console.log("[MyTeams:helper] Scraper success:", src, `(${list.length})`);
         return { fixtures: list, source: src };
@@ -1110,12 +1185,36 @@ async function tryScrapersInOrder(flags, timeoutMs, debug) {
  * ---------------------------
  */
 module.exports = NodeHelper.create({
-  start() {
+  start: function() {
+    console.log("Starting node helper for: MMM-MyTeams-Fixtures");
     loadCacheFromDisk();
-    console.log("[MyTeams:helper] Started. Fetch:", _fetchType, "available:", !!_fetchImpl);
+    
+    // Configure shared request manager
+    requestManager.updateConfig({
+        minRequestInterval: 2000,
+        minDomainInterval: 1000,
+        maxRetries: 3,
+        requestTimeout: 15000
+    });
+  },
+
+  stop: function() {
+    // PERF-004: clear the queue-processor interval when the helper is stopped
+    requestManager.destroy();
   },
 
   async socketNotificationReceived(notification, payload) {
+    if (notification === "CLEAR_FIXTURES_CACHE") {
+      try {
+        cache = { ts: 0, ttl: 0, source: null, key: null, data: null };
+        try { if (fs.existsSync(CACHE_FILE)) fs.unlinkSync(CACHE_FILE); } catch (_) {}
+        this.sendSocketNotification("FIXTURES_DATA", { fixtures: [], fetchedAt: new Date().toISOString(), usedSource: "cache-cleared" });
+      } catch (e) {
+        this.sendSocketNotification("FIXTURES_ERROR", { message: e.message || "Cache clear failed" });
+      }
+      return;
+    }
+
     if (notification !== "GET_FIXTURES") return;
 
     const {
@@ -1125,7 +1224,7 @@ module.exports = NodeHelper.create({
       apiUrl,
       season,
       fallbackSeason,
-      scottishLeagueIds = [],
+     leagueIds = [],
       uefaLeagueIds = [],
       maxFixtures,
       cacheTTL = 300000,
@@ -1148,9 +1247,26 @@ module.exports = NodeHelper.create({
 
     const normalizedSource = String(source || "api").toLowerCase().trim();
 
+    // SEC-004: Validate apiUrl before use — must be https:// and target thesportsdb.com
+    const ALLOWED_API_HOSTNAME = "www.thesportsdb.com";
+    try {
+      const parsedApiUrl = new URL(apiUrl);
+      if (parsedApiUrl.protocol !== "https:" || parsedApiUrl.hostname !== ALLOWED_API_HOSTNAME) {
+        this.sendSocketNotification("FIXTURES_ERROR", {
+          message: `Invalid apiUrl: must be https://${ALLOWED_API_HOSTNAME}/...`
+        });
+        return;
+      }
+    } catch (urlErr) {
+      this.sendSocketNotification("FIXTURES_ERROR", {
+        message: `Invalid apiUrl: ${urlErr.message}`
+      });
+      return;
+    }
+
     // Cache key to avoid cross-team leakage and respect filtering flags
     const teamKey = String((teamId && String(teamId).trim()) ? String(teamId).trim() : (teamName || "")).toLowerCase();
-    const cacheKey = `${normalizedSource}|${teamKey}|${(scottishLeagueIds||[]).join(',')}|${(uefaLeagueIds||[]).join(',')}|${strictLeagueFiltering?'strict':'loose'}|${useSearchEventsFallback?'searchOn':'searchOff'}`;
+    const cacheKey = `${normalizedSource}|${teamKey}|${(leagueIds||[]).join(',')}|${(uefaLeagueIds||[]).join(',')}|${strictLeagueFiltering?'strict':'loose'}|${useSearchEventsFallback?'searchOn':'searchOff'}`;
 
     // Serve cache if valid and key matches
     if (cache.data && Array.isArray(cache.data) && cache.data.length > 0 && cache.key === cacheKey && (Date.now() - cache.ts) < (cache.ttl || cacheTTL)) {
@@ -1195,7 +1311,7 @@ module.exports = NodeHelper.create({
           fallbackSeason,
           requestTimeoutMs,
           maxFixtures,
-          scottishLeagueIds,
+         leagueIds,
           uefaLeagueIds,
           useSearchEventsFallback,
           strictLeagueFiltering,
@@ -1209,6 +1325,8 @@ module.exports = NodeHelper.create({
             try {
               const { fixtures: fwpFx } = await tryScrapersInOrder(
                 { scrapeFWP: true, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: false, scrapeCFC: false },
+                teamName,
+                teamId,
                 requestTimeoutMs,
                 debug
               );
@@ -1244,6 +1362,46 @@ module.exports = NodeHelper.create({
             }
           }
 
+          // If API returned no European fixtures (common for knockout draws), supplement from BBC
+          const apiEuro = fixtures.filter(f => (f.competitionType || '').toLowerCase() === 'european').length;
+          if (apiEuro === 0) {
+            try {
+              const { fixtures: bbcFx } = await tryScrapersInOrder(
+                { scrapeFWP: false, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
+                teamName,
+                teamId,
+                requestTimeoutMs,
+                debug
+              );
+              const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
+              const bbcEuro = Array.isArray(bbcFx) ? bbcFx.filter(f => (f.competitionType || '').toLowerCase() === 'european').map(f => ({
+                ...f,
+                date: f.date || inferISOFromDateText(f.dateText, seasonStr)
+              })) : [];
+              if (bbcEuro.length) {
+                const merged = [...fixtures, ...bbcEuro];
+                const seen = new Set();
+                const deduped = merged.filter(f => {
+                  const key = `${f.date}|${f.timeText}|${(f.opponent||"").toLowerCase()}|${f.homeAway}|${(f.competition||"").toLowerCase()}`;
+                  if (seen.has(key)) return false;
+                  seen.add(key);
+                  return true;
+                });
+                deduped.sort((a,b) => {
+                  const ta = Date.parse(`${a.date || '9999-12-31'}T${(a.timeText || '23:59')}:00`);
+                  const tb = Date.parse(`${b.date || '9999-12-31'}T${(b.timeText || '23:59')}:00`);
+                  return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
+                });
+                const limited = typeof maxFixtures === 'number' ? deduped.slice(0, maxFixtures) : deduped;
+                if (debug) console.log(`[MyTeams:helper] Supplemented European fixtures from BBC: ${bbcEuro.length}, merged=${limited.length}`);
+                sendSuccess(limited, "api+bbc");
+                return;
+              }
+            } catch (e) {
+              console.warn("[MyTeams:helper] BBC supplement failed:", e.message);
+            }
+          }
+
           sendSuccess(fixtures, "api");
           return;
         }
@@ -1252,6 +1410,8 @@ module.exports = NodeHelper.create({
           if (debug) console.log("[MyTeams:helper] API returned empty; trying scrapers (secondary)...");
           const { fixtures: sfx, source: ssrc } = await tryScrapersInOrder(
             { scrapeFWP, scrapeLFOTV, scrapeSportsDB,  scrapeBBC,  scrapeCFC },
+            teamName,
+            teamId,
             requestTimeoutMs,
             debug
           );
@@ -1268,6 +1428,8 @@ module.exports = NodeHelper.create({
       // Secondary path: scrapers only, in required order
       const { fixtures: sfx, source: ssrc } = await tryScrapersInOrder(
         {  scrapeFWP, scrapeLFOTV, scrapeSportsDB, scrapeBBC, scrapeCFC },
+        teamName,
+        teamId,
         requestTimeoutMs,
         debug
       );
