@@ -271,8 +271,9 @@ function classifyCompetition(name) {
 // Utility: normalize text for opponent extraction
 function sanitizeOpponent(text) {
   if (!text) return text;
+  // Strip leading times like "12:45 ", "20:00 "
+  let t = text.replace(/^\d{1,2}:\d{2}\s*/, "").replace(/\s+/g, " ").trim();
   const cuts = [" TV", " Kick", " KO", " | ", " - ", " (", " @ "];
-  let t = text.replace(/\s+/g, " ").trim();
   for (const cut of cuts) {
     const idx = t.indexOf(cut);
     if (idx > 0) { t = t.slice(0, idx).trim(); break; }
@@ -284,7 +285,7 @@ function sanitizeOpponent(text) {
 function extractDateTimeFallback(allText) {
   // Normalize text: collapse spaces, insert spaces between letters and digits, and handle MDx<time> cases
   const base = String(allText || "").replace(/\s+/g, " ").trim();
-  const norm1 = base.replace(/([A-Za-z])(\d)/g, "$1 $2"); // Premiership3pm -> Premiership 3pm, MD18pm -> MD 18pm
+  const norm1 = base.replace(/([A-Za-z])(\d)/g, "$1 $2").replace(/(\d)([A-Za-z])/g, "$1 $2"); // Premiership3pm -> Premiership 3pm, 12:45pmManchester -> 12:45pm Manchester
   const norm2 = norm1.replace(/(MD\s*\d)(\d)(am|pm)\b/i, "$1 $2$3"); // MD1 8pm when stuck as MD18pm
   const txt = norm2;
 
@@ -796,15 +797,15 @@ function buildScraperUrls(teamName, teamId) {
   const safe = sanitizeTeamName(teamName);
   if (!safe) {
     console.error(`[MyTeams:helper] SEC-002: teamName "${teamName}" contains unsafe characters — scraper URLs blocked`);
-    return { fwp: null, livefootballontv: null, bbc: null, sportsdb: null, cfc: null };
+    return { fwp: null, sportsdb: null, bbc: null, livefootballontv: null, cfc: null };
   }
   const slug = safe.toLowerCase().replace(/\s+/g, "-");
   const safeId = String(teamId || "133647").replace(/[^0-9a-zA-Z\-_]/g, "");
   return {
     fwp: `https://www.footballwebpages.co.uk/${encodeURIComponent(slug)}/fixtures-results`,
-    livefootballontv: `https://www.live-footballontv.com/${encodeURIComponent(slug)}-on-tv.html`,
-    bbc: `https://www.bbc.co.uk/sport/football/teams/${encodeURIComponent(slug)}/scores-fixtures`,
     sportsdb: `https://www.thesportsdb.com/team/${encodeURIComponent(safeId)}-${encodeURIComponent(slug)}`,
+    bbc: `https://www.bbc.co.uk/sport/football/teams/${encodeURIComponent(slug)}/scores-fixtures`,
+    livefootballontv: `https://www.live-footballontv.com/${encodeURIComponent(slug)}-on-tv.html`,
     cfc: KNOWN_CFC_SLUGS.has(slug) ? `https://www.${slug}fc.com/fixtures` : null
   };
 }
@@ -958,13 +959,18 @@ function parseBBC(html, teamName = "Celtic") {
 function parseFWP(html, teamName = "Celtic", debug = false) {
   const $ = cheerio.load(html);
   const fixtures = [];
+  let lastDateText = ""; // Track date across rows in case of headers
   const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
   $(".fixture, .fixtures .match, table tr").each((i, el) => {
     let dateText = $(el).find(".date, .fixture-date, td.date, time").first().text().trim();
+    if (dateText) lastDateText = dateText;
+    else dateText = lastDateText;
+
     let timeText = $(el).find(".time, td.time").first().text().trim();
     const comp = $(el).find(".competition, td.competition").first().text().trim();
 
-    const allText = $(el).text().replace(/\s+/g, " ").trim();
+    // Use a space-preserving text extraction to prevent smashed tokens
+    const allText = $(el).find("*").addBack().contents().filter((_,n) => n.nodeType===3).get().map(n => n.data).join(" ").replace(/\s+/g, " ").trim();
     if (!dateText || !timeText) {
       const fb = extractDateTimeFallback(allText);
       if (!dateText) dateText = fb.dateText || dateText;
@@ -997,7 +1003,7 @@ function parseFWP(html, teamName = "Celtic", debug = false) {
 
     // Extract teams from generic "A v B" pattern and infer H/A for configured team
     let opponent = null; let homeAway = null;
-    const teamPair = allText.match(/([A-Za-z0-9 .&'\-]+)\s+v(?:s\.?)*\s+([A-Za-z0-9 .&'\-]+)/i);
+    const teamPair = allText.match(/([A-Za-z0-9 .&':\-]+)\s+v(?:s\.?)*\s+([A-Za-z0-9 .&':\-]+)/i);
     if (teamPair) {
       const t1 = teamPair[1].trim();
       const t2 = teamPair[2].trim();
@@ -1239,9 +1245,9 @@ async function tryScrapersInOrder(flags, teamName, teamId, timeoutMs, debug) {
   const order = [];
   // Prefer FWP first as requested
   if (flags.scrapeFWP) order.push("fwp");
-  if (flags.scrapeLFOTV) order.push("livefootballontv");
   if (flags.scrapeSportsDB) order.push("sportsdb");
   if (flags.scrapeBBC) order.push("bbc");
+  if (flags.scrapeLFOTV) order.push("livefootballontv");
   if (flags.scrapeCFC) order.push("cfc");
 
   for (const src of order) {
@@ -1403,7 +1409,7 @@ module.exports = NodeHelper.create({
           if (apiAway === 0) {
             try {
               const { fixtures: fwpFx } = await tryScrapersInOrder(
-                { scrapeFWP: true, scrapeLFOTV: true, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
+                { scrapeFWP: true, scrapeSportsDB: false, scrapeBBC: true, scrapeLFOTV: true, scrapeCFC: false },
                 teamName,
                 teamId,
                 requestTimeoutMs,
@@ -1446,7 +1452,7 @@ module.exports = NodeHelper.create({
           if (apiEuro === 0) {
             try {
               const { fixtures: bbcFx } = await tryScrapersInOrder(
-                { scrapeFWP: false, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
+                { scrapeBBC: true, scrapeFWP: false, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
                 teamName,
                 teamId,
                 requestTimeoutMs,
