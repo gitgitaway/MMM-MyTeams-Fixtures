@@ -23,7 +23,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     defaultFilter: "all",
     debug: false,
 
-    cacheTTL: 5 * 60 * 1000,
+    cacheTTL: 0 * 60 * 1000,
     fallbackChain: true,
 
     leagueIds: ["4330", "4364", "4363", "4888"],
@@ -32,7 +32,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     useSearchEventsFallback: true,
     strictLeagueFiltering: true,
 
-    scrapeFWP: true,
+    scrapeFWP: false,
 
     maxTableHeight: 260,
     countdownIntervalMs: 60000,

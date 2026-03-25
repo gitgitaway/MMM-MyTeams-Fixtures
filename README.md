@@ -186,7 +186,8 @@ Detailed guides are in the `documentation/` folder:
 
 | Guide | Contents |
 |-------|---------|
-| [HowThisModuleWorks.md](documentation/HowThisModuleWorks.md) | Architecture, data flow, caching, filtering, socket API |
+| [HowThisModuleWorks.md](documentation/HowThisModuleWorks.md) | Architecture, data flow, caching, filtering, footer messages, socket API |
+| [Debug_Guide.md](documentation/Debug_Guide.md) | Enabling debug mode, complete log message reference, common log sequences |
 | [FindingYourTeamID.md](documentation/FindingYourTeamID.md) | TheSportsDB team and league ID lookup, common ID tables |
 | [CustomisingTheDisplay.md](documentation/CustomisingTheDisplay.md) | CSS custom properties, theming, column options, `customOverrides.css` |
 | [MultiTeamAndAlerts-Guide.md](documentation/MultiTeamAndAlerts-Guide.md) | Multi-team switcher setup, pre-match alert config |
