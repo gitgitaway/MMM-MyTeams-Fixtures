@@ -1,8 +1,8 @@
 # MMM-MyTeams-Fixtures
 
-A [MagicMirror²](https://magicmirror.builders/) module that displays upcoming football fixtures for **any team** from TheSportsDB API, with optional supplement from FootballWebPages for away fixtures.
+A [MagicMirror²](https://magicmirror.builders/) module that displays upcoming football fixtures for **any team** by scraping FootballWebPages, Wikipedia, BBC Sport, LiveFootballOnTV, and (when supported) the club's own site.
 
-[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-brightgreen)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![MagicMirror²](https://img.shields.io/badge/MagicMirror²-compatible-orange)](https://magicmirror.builders/)
 
@@ -21,7 +21,8 @@ A [MagicMirror²](https://magicmirror.builders/) module that displays upcoming f
 
 ## Features
 
-- **Works with any team** — Scottish, English, Spanish, European, or any club in TheSportsDB
+- **Works with any team** — Scottish, English, Spanish, European, or any club with a public fixture page
+- **Five scrapers in one chain** — FootballWebPages · Wikipedia · BBC Sport · LiveFootballOnTV · club-site (CFC). The chain tries each in turn until one returns fixtures.
 - **Filter tabs** — All · Domestic · European · Home · Away (with live fixture counts)
 - **Auto-cycle** — Automatically rotates through selected filter views on a timer
 - **Multi-team** — Switch between multiple clubs without restarting (INN-003)
@@ -34,7 +35,17 @@ A [MagicMirror²](https://magicmirror.builders/) module that displays upcoming f
 - **Internationalised** — 9 languages: en · de · es · fr · ga · gd · it · nl · pt
 - **Themeable** — CSS custom property (`--mmf-accent-color`) for your team's brand colour
 - **Dual caching** — In-memory + disk cache survives restarts
-- **Rate-limited** — Shared Request Manager prevents API throttling
+- **Rate-limited** — Shared Request Manager prevents site throttling
+
+---
+
+## Why Scrapers (and Not TheSportsDB)?
+
+Through v1.x this module used TheSportsDB's JSON API as its primary source. As of mid-2026 the free TheSportsDB tier only returns a single fixture per query, which made it unreliable for displaying a full season schedule. TheSportsDB scrape support has also been removed.
+
+Version 2.0.0 is **scrapers only**. FWP remains the most reliable source for most clubs; Wikipedia provides an excellent backup when FWP cannot resolve the team; BBC and LiveFootballOnTV add broadcast-specific information where exposed by the source page; the club-site scraper exists for the small set of clubs whose official site publishes clean tables.
+
+See [`HowThisModuleWorks.md`](documentation/HowThisModuleWorks.md) for the full architecture.
 
 ---
 
@@ -70,12 +81,12 @@ Add the module to `~/MagicMirror/config/config.js`:
   module: "MMM-MyTeams-Fixtures",
   position: "bottom_right",
   config: {
-    teamName: "Liverpool",
-    teamId: "133602",
-    leagueIds: ["4328", "4424", "4426"]
+    teamName: "Liverpool"
   }
 }
 ```
+
+That's all you need for the default chain (FWP → Wikipedia → BBC → LiveFootballOnTV → CFC).
 
 ### Full Example (Celtic FC)
 
@@ -85,15 +96,15 @@ Add the module to `~/MagicMirror/config/config.js`:
   position: "bottom_right",
   config: {
     teamName: "Celtic",
-    teamId: "133647",
-    leagueIds: ["4330", "4364", "4363", "4888"],
-    uefaLeagueIds: ["4480", "4481", "5071"],
+    scrapeFWP: true,
+    scrapeWikipedia: true,
+    scrapeBBC: false,
+    scrapeLFOTV: false,
+    scrapeCFC: false,
 
-    source: "api",
-    season: "auto",
-    fallbackSeason: "2025-2026",
+    source: "fwp",
     updateInterval: 10 * 60 * 1000,
-    maxFixtures: 12,
+    maxFixtures: 60,
 
     showCompetition: true,
     showCountdown: true,
@@ -106,9 +117,6 @@ Add the module to `~/MagicMirror/config/config.js`:
     cycleHome: true,
     cycleAway: true,
 
-    scrapeFWP: true,
-    strictLeagueFiltering: true,
-
     accentColor: "#018749",
     locale: "en-GB",
     language: "en",
@@ -117,12 +125,30 @@ Add the module to `~/MagicMirror/config/config.js`:
 }
 ```
 
-### Finding Your Team ID
+### Choosing A Scraper (`source`)
 
-Visit [thesportsdb.com](https://www.thesportsdb.com/), search for your team, and read the ID from the URL:  
-`https://www.thesportsdb.com/team/`**133647**`-Celtic`
+The `source` option sets which scraper runs:
 
-See [documentation/FindingYourTeamID.md](documentation/FindingYourTeamID.md) for a full guide and common team/league ID tables.
+| `source` value | Behaviour |
+|---|---|
+| omitted / unset | Default chain — FWP → Wikipedia → BBC → LFOTV → CFC, ordered by scraper flags |
+| `"fwp"` | FootballWebPages only |
+| `"wikipedia"` | Wikipedia only |
+| `"bbc"` | BBC Sport only |
+| `"livefootballontv"` | LiveFootballOnTV only |
+| `"cfc"` | Club official site only |
+
+The scraper must also be enabled via its `scrape*` flag; otherwise the chain returns an error banner.
+
+### Finding Your Team Name
+
+Just specify `teamName` — the team name is used to build scraper URLs and to look up the right Wikipedia article. Examples:
+
+- `"Celtic"` — FWP path `celtic`; Wikipedia article `Celtic F.C.`
+- `"Liverpool"` — FWP path `liverpool`; Wikipedia article `Liverpool F.C.`
+- `"Real Madrid"` — FWP path `real-madrid`
+
+See [documentation/FindingYourTeamID.md](documentation/FindingYourTeamID.md) for the full lookup method and the common team names table.
 
 ---
 
@@ -130,26 +156,17 @@ See [documentation/FindingYourTeamID.md](documentation/FindingYourTeamID.md) for
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| **`teamName`** | string | `"Celtic"` | Your team's name — used for display and scraper URL construction |
-| **`teamId`** | string | `"133647"` | TheSportsDB team ID — find at thesportsdb.com |
-| **`leagueIds`** | string[] | `["4330","4364","4363","4888"]` | Domestic league/cup IDs for your team *(defaults to Scottish)*  |
-| `uefaLeagueIds` | string[] | `["4480","4481","5071"]` | UEFA competition IDs (CL, EL, UECL) |
-| `source` | string | `"api"` | Primary source: `"api"` or scraper-only |
-| `apiUrl` | string | `"https://www.thesportsdb.com/api/v1/json/3"` | API base URL — must remain thesportsdb.com |
-| `season` | string | `"auto"` | Season string e.g. `"2025-2026"` or `"auto"` |
-| `fallbackSeason` | string | `"2025-2026"` | Secondary season tried if primary returns empty |
+| **`teamName`** | string | `"Celtic"` | Your team's name — used for scraper URL construction and Wikipedia lookup |
+| `source` | string | *(chain)* | Optional: pin to a single scraper (`"fwp"`, `"wikipedia"`, `"bbc"`, `"livefootballontv"`, `"cfc"`) |
+| `scrapeFWP` | boolean | `true` | Enable FootballWebPages scraper |
+| `scrapeWikipedia` | boolean | `true` | Enable Wikipedia scraper (article-title lookup + season tables) |
+| `scrapeBBC` | boolean | `false` | Enable BBC Sport scraper |
+| `scrapeLFOTV` | boolean | `false` | Enable LiveFootballOnTV scraper |
+| `scrapeCFC` | boolean | `false` | Enable club official-site scraper (known clubs only) |
 | `updateInterval` | number | `600000` | Data refresh interval in ms (default: 10 min) |
 | `requestTimeoutMs` | number | `15000` | Per-request timeout in ms |
 | `maxFixtures` | number | `60` | Maximum number of fixtures to display |
 | `cacheTTL` | number | `300000` | Cache lifetime in ms (default: 5 min) |
-| `fallbackChain` | boolean | `true` | Try scrapers when API returns no data |
-| `useSearchEventsFallback` | boolean | `true` | Try `/searchevents.php` patterns if standard endpoints return empty |
-| `strictLeagueFiltering` | boolean | `true` | Enforce `leagueIds` whitelist; `false` = show all fixtures for the team |
-| `scrapeFWP` | boolean | `true` | Enable FootballWebPages supplement for away fixtures |
-| `scrapeBBC` | boolean | `false` | Enable BBC Sport scraper (full fallback) |
-| `scrapeLFOTV` | boolean | `false` | Enable LiveFootballOnTV scraper (full fallback) |
-| `scrapeCFC` | boolean | `false` | Enable team-official-site scraper (known clubs only) |
-| `scrapeSportsDB` | boolean | `false` | Enable TheSportsDB HTML scraper (full fallback) |
 | `showCompetition` | boolean | `true` | Show competition column in table |
 | `showCountdown` | boolean | `true` | Show `⏱ Xd Yh` countdown badge to next fixture |
 | `showFooter` | boolean | `true` | Show source/timestamp footer |
@@ -168,15 +185,40 @@ See [documentation/FindingYourTeamID.md](documentation/FindingYourTeamID.md) for
 | `locale` | string | `"en-GB"` | Locale for date/time formatting (e.g. `"de-DE"`, `"fr-FR"`) |
 | `language` | string | `"en"` | UI language code: `en` `de` `es` `fr` `ga` `gd` `it` `nl` `pt` |
 | `accentColor` | string | `"#018749"` | Team accent colour — sets `--mmf-accent-color` CSS variable |
+| `venueHomeColor` | string | `"#FFFFFF"` | Home match indicator text color |
+| `venueHomeBackground` | string | `"#28a745"` | Home match indicator background color |
+| `venueAwayColor` | string | `"#FFFFFF"` | Away match indicator text color |
+| `venueAwayBackground` | string | `"#dc3545"` | Away match indicator background color |
+| `venueNeutralColor` | string | `"#FFFFFF"` | Neutral venue indicator text color |
+| `venueNeutralBackground` | string | `"#007bff"` | Neutral venue indicator background color |
 | `darkMode` | boolean\|null | `null` | `null` = auto, `true` = force dark, `false` = force light |
 | `fontColorOverride` | string\|null | `null` | Force text colour, e.g. `"#FFFFFF"` |
 | `opacityOverride` | number\|null | `null` | Force wrapper opacity `0.0`–`1.0` |
-| `teams` | array\|null | `null` | Multi-team mode — array of `{ label, teamName, teamId, leagueIds, uefaLeagueIds }` objects |
+| `teams` | array\|null | `null` | Multi-team mode — array of `{ label, teamName }` objects |
 | `enableAlerts` | boolean | `false` | Fire MagicMirror SHOW_ALERT notification before kick-off |
 | `alertBeforeMinutes` | number | `30` | Minutes before kick-off to send the alert |
 | `debug` | boolean | `false` | Verbose console logging for troubleshooting |
 
 > **Bold** options are the ones most users need to change. Everything else can be left at its default.
+
+### Legacy / Deprecated Config Options
+
+The following options were removed in v2.0.0 and will be silently ignored by the new code:
+
+| Removed in v2.0.0 | Why |
+|---|---|
+| `apiUrl` | API path was removed |
+| `teamId` | API path was removed (slug-variants on `teamName` now drive the chain) |
+| `season` | API path was removed |
+| `fallbackSeason` | API path was removed |
+| `leagueIds` | API path was removed |
+| `uefaLeagueIds` | API path was removed |
+| `strictLeagueFiltering` | API path was removed |
+| `useSearchEventsFallback` | API path was removed |
+| `fallbackChain` | Chain is the only path now — always enabled |
+| `scrapeSportsDB` | TheSportsDB scraper was removed |
+
+If your `config.js` still contains any of these entries, delete them. The module will continue to work without them but their presence no longer affects output.
 
 ---
 
@@ -188,14 +230,15 @@ Detailed guides are in the `documentation/` folder:
 |-------|---------|
 | [HowThisModuleWorks.md](documentation/HowThisModuleWorks.md) | Architecture, data flow, caching, filtering, footer messages, socket API |
 | [Debug_Guide.md](documentation/Debug_Guide.md) | Enabling debug mode, complete log message reference, common log sequences |
-| [FindingYourTeamID.md](documentation/FindingYourTeamID.md) | TheSportsDB team and league ID lookup, common ID tables |
+| [FindingYourTeamID.md](documentation/FindingYourTeamID.md) | Team name lookup methods (FWP, Wikipedia, BBC) |
 | [CustomisingTheDisplay.md](documentation/CustomisingTheDisplay.md) | CSS custom properties, theming, column options, `customOverrides.css` |
 | [MultiTeamAndAlerts-Guide.md](documentation/MultiTeamAndAlerts-Guide.md) | Multi-team switcher setup, pre-match alert config |
 | [LanguageAndTranslation-Guide.md](documentation/LanguageAndTranslation-Guide.md) | Supported languages, adding a new translation |
 | [AccessibilityFeatures-Guide.md](documentation/AccessibilityFeatures-Guide.md) | ARIA implementation, keyboard navigation, screen reader support |
 | [Troubleshooting.md](documentation/Troubleshooting.md) | Common issues, debug log reference, fixes |
 | [SHARED_REQUEST_MANAGER.md](documentation/SHARED_REQUEST_MANAGER.md) | HTTP queue, rate limiting, retry logic internals |
-| [football-teams-database.csv](data/football_teams_database.csv) | Quick way to find your teams Sports DB id codes |
+| [Final_Module_Review.md](documentation/Final_Module_Review.md) | Open recommendations, status of historical findings, phased implementation plan |
+
 ---
 
 ## Dependencies
@@ -249,15 +292,17 @@ Please:
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history of changes.
 
-**Current version: 1.3.0** — Full security, performance, accessibility and UX review cycle.
+**Current version: 2.0.0** — Removed TheSportsDB API path (free tier no longer returns full season). Added Wikipedia scraper with article-title lookup.
 
 ---
 
 ## Acknowledgments
 
 - **@jclarke0000** — MMM-MyScoreboard served as early inspiration
-- **[TheSportsDB](https://www.thesportsdb.com/)** — Free football data API
-- **[FootballWebPages](https://www.footballwebpages.co.uk/)** — Away fixture supplement
+- **[FootballWebPages](https://www.footballwebpages.co.uk/)** — Most reliable fixture source
+- **[Wikipedia](https://en.wikipedia.org/)** — Strong secondary source via article-title lookup
+- **[BBC Sport](https://www.bbc.co.uk/sport)** — Fixture pages used for BBC scraper
+- **[LiveFootballOnTV](https://www.live-footballontv.com/)** — Broadcast-aware fixture source
 - **MagicMirror² Community** — Guidance, feedback, and support
 
 ---

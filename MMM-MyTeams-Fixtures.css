@@ -10,6 +10,12 @@
   --mmf-table-header-bg:   rgba(0, 0, 0, 0.6);
   --mmf-filter-active-bg:  rgba(1, 135, 73, 0.4);  /* accent at 40 % opacity */
   --mmf-scroll-bg:         rgba(0, 0, 0, 0.3);
+  --mmf-venue-home-color:      #ffffff;
+  --mmf-venue-home-bg:         #018749;
+  --mmf-venue-away-color:      #ffffff;
+  --mmf-venue-away-bg:         #555555;
+  --mmf-venue-neutral-color:   #000000;
+  --mmf-venue-neutral-bg:      #add8e6;   /* Brighter LightBlue */
   color: #fff;
   max-width: 550px;
   margin: 0 auto;
@@ -181,25 +187,97 @@
 /* ─────────────────────────────────────────
    Header control icons
    ───────────────────────────────────────── */
+/* Base shared styles for all control buttons */
 .myteams-fixtures .refresh-btn,
 .myteams-fixtures .clear-cache-btn,
 .myteams-fixtures .pin-btn {
-  transition: color 0.3s ease, transform 0.3s ease;
-}
-
-.myteams-fixtures .refresh-btn:hover,
-.myteams-fixtures .clear-cache-btn:hover,
-.myteams-fixtures .pin-btn:hover {
+  width: 34px;
+  height: 34px;
+  margin: 0 4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.5);
   color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
 }
 
-.myteams-fixtures .refresh-btn.fa-spin,
-.myteams-fixtures .clear-cache-btn.fa-spin {
-  color: var(--mmf-accent-color);
+.myteams-fixtures .refresh-btn i,
+.myteams-fixtures .clear-cache-btn i,
+.myteams-fixtures .pin-btn i {
+  font-size: 16px;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
 }
 
+/* REFRESH — circular shape */
+.myteams-fixtures .refresh-btn {
+  border-radius: 50%;
+  background-color: rgba(0, 150, 255, 0.15); /* Slight blue tint */
+}
+
+/* CLEAR CACHE — sharp square */
+.myteams-fixtures .clear-cache-btn {
+  border-radius: 0;
+  border-style: dashed;
+  background-color: rgba(255, 100, 100, 0.15); /* Slight red tint */
+}
+
+/* PIN — rotated square (diamond) */
+.myteams-fixtures .pin-btn {
+  border-radius: 4px;
+  transform: rotate(45deg);
+  background-color: rgba(255, 200, 0, 0.15); /* Slight gold tint */
+}
+.myteams-fixtures .pin-btn i {
+  transform: rotate(-45deg);
+}
+
+/* Pin active state — filled background + solid border */
 .myteams-fixtures .pin-btn.active {
-  color: #ff3333;
+  background-color: rgba(255, 255, 255, 0.28);
+  border-style: solid;
+  border-width: 3px;
+}
+
+/* Hover states */
+.myteams-fixtures .refresh-btn:hover {
+  background-color: rgba(0, 150, 255, 0.3);
+  border-color: #0096ff;
+}
+.myteams-fixtures .clear-cache-btn:hover {
+  background-color: rgba(255, 100, 100, 0.3);
+  border-color: #ff6464;
+}
+.myteams-fixtures .pin-btn:hover {
+  background-color: rgba(255, 200, 0, 0.3);
+  border-color: #ffc800;
+}
+
+/* Press / click animation */
+.myteams-fixtures .refresh-btn:active,
+.myteams-fixtures .clear-cache-btn:active {
+  transform: scale(0.85);
+  background-color: rgba(255, 255, 255, 0.35);
+}
+.myteams-fixtures .pin-btn:active {
+  transform: rotate(45deg) scale(0.85);
+  background-color: rgba(255, 255, 255, 0.35);
+}
+
+/* Spin animation on inner icon */
+.myteams-fixtures .refresh-btn i.fa-spin,
+.myteams-fixtures .clear-cache-btn i.fa-spin {
+  animation: mmf-icon-spin 1s linear infinite;
+}
+
+@keyframes mmf-icon-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 .myteams-fixtures .cycle-countdown { /* plain dimmed text */ }
@@ -239,12 +317,46 @@
 .myteams-fixtures .col-date { width: 60px;  opacity: 0.9; }
 .myteams-fixtures .col-time { width: 44px;  opacity: 0.9; }
 .myteams-fixtures .col-opp  { width: 100px; }
-.myteams-fixtures .col-ha   { width: 32px;  text-align: center; font-weight: 500; }
+.myteams-fixtures .col-ha   { width: 32px;  text-align: center; }
 .myteams-fixtures .col-comp { width: 140px; opacity: 0.9; padding-left: 8px; }
 
-/* ACC-003: colour H/A arrows in addition to the Unicode prefix */
-.myteams-fixtures .fixtures-table tbody tr.home .col-ha { color: var(--mmf-accent-color); }
-.myteams-fixtures .fixtures-table tbody tr.away .col-ha { color: #aaaaaa; }
+/* ACC-003: Venue indicator styles with accessibility differentiation */
+.myteams-fixtures .venue-indicator {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 10px;
+  box-sizing: border-box;
+}
+
+.myteams-fixtures .venue-home {
+  background-color: var(--mmf-venue-home-bg);
+  color: var(--mmf-venue-home-color);
+  border-radius: 50%; /* Circle for Home */
+}
+
+.myteams-fixtures .venue-away {
+  background-color: var(--mmf-venue-away-bg);
+  color: var(--mmf-venue-away-color);
+  border-radius: 2px; /* Square for Away */
+}
+
+.myteams-fixtures .fixtures-table .venue-neutral {
+  background-color: #add8e6 !important; /* Force light blue */
+  color: #000000 !important;             /* Force black text */
+  border: 1px solid #000000 !important;
+  border-radius: 10px;                  /* Pill shape */
+  width: 28px !important;               /* Slightly wider for oval */
+  height: 18px !important;
+  line-height: 18px !important;
+  margin-left: -4px;
+  display: inline-block;
+  font-size: 11px !important;
+  font-weight: bold !important;
+}
 
 /* INN-002: live match row highlight */
 .myteams-fixtures .fixtures-table tbody tr.live-match {
@@ -288,25 +400,22 @@
 }
 
 /* ─────────────────────────────────────────
-   Back-to-top  — DES-004: higher specificity, no !important cascade
+   Footer — UX-002: stale state
    ───────────────────────────────────────── */
-.myteams-fixtures .fixtures-scroll .scroll-controls {
-  position: sticky;
-  bottom: 0;
+.myteams-fixtures .source-footer {
+  margin-top: 6px;
+  opacity: 0.8;
   display: flex;
-  justify-content: flex-end;
-  padding: 8px;
-  background: var(--mmf-scroll-bg);
-  border-top: 1px solid rgba(255,255,255,0.1);
-  z-index: 50;
-  opacity: 0;
-  transition: opacity 0.2s ease-in-out;
-  pointer-events: none;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  min-height: 24px;
 }
 
-.myteams-fixtures .fixtures-scroll .scroll-controls.visible {
+.myteams-fixtures .source-info.stale {
+  color: #ffa500;
   opacity: 1;
-  pointer-events: auto;
 }
 
 .myteams-fixtures .btn-back-to-top {
@@ -314,33 +423,26 @@
   color: #fff;
   border: 1px solid rgba(255,255,255,0.25);
   border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 11px;
+  padding: 3px 8px;
+  font-size: 10px;
   line-height: 1.0;
   font-weight: bold;
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(5px);
+}
+
+.myteams-fixtures .btn-back-to-top.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .myteams-fixtures .btn-back-to-top:hover {
-  opacity: 1;
-  transform: translateY(-3px);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-}
-
-/* ─────────────────────────────────────────
-   Footer  — UX-002: stale state
-   ───────────────────────────────────────── */
-.myteams-fixtures .source-footer {
-  margin-top: 6px;
-  opacity: 0.8;
-  text-align: center;
-}
-
-.myteams-fixtures .source-footer.stale {
-  color: #ffa500;
-  opacity: 1;
+  filter: brightness(1.2);
 }
 
 /* ─────────────────────────────────────────

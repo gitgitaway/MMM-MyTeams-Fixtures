@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] - 2026-07-16
+
+### Major Architectural Change — Scrapers Only
+
+This release removes **all TheSportsDB API integration** (the JSON API endpoint path) and the **`sportsdb` HTML scraper** from the codebase. The free TheSportsDB tier was restricted to returning only a single fixture, which made the API pathway unsuitable for a complete season fixture list. A new **Wikipedia scraper** has been added so the module now relies on five task-specific scrapers, each scraping from a single best-fit source for its target team.
+
+This is a **breaking change** for any user who relied on the `apiUrl`, `teamId`, `season`, `fallbackSeason`, `leagueIds`, `uefaLeagueIds`, `useSearchEventsFallback`, `strictLeagueFiltering`, `fallbackChain`, or `scrapeSportsDB` config options.
+
+### Removed
+
+- **All TheSportsDB JSON API code paths** — `getFixturesFromAPI`, `resolveTeamIdIfNeeded`, `resolveTeamIdByName`, `resolveSeasonAuto`, `inferISOFromDateText`, `toFixtureFromEvent`, `MIN_API_INTERVAL_MS`, `lastApiAt`, `sleep`, `rateLimitWait`, `apiFetchWithRetry`, and the SEC-004 `apiUrl`-domain validator
+- **Supplement logic** that hardcoded `scrapeFWP`, `scrapeLFOTV`, and `scrapeBBC` to fill gaps in the API response
+- **Away-fixture supplement** (`apiAway===0 → FWP`) and **European-fixture supplement** (`apiEuro===0 → BBC`) steps
+- **`sportsdb` HTML scraper** (`parseSportsDB`) and its dispatch entry in `fetchAndParseScraper`
+- **`fallbackChain` orchestrator** — order is now a simple chain iterated by `tryScrapersInOrder` using only the user's boolean flags
+- **`source: "api"` and `"source: "sportsdb"`** values; both no longer function and the names are kept only as historical labels in the changelog
+
+### Added
+
+- **`scrapeWikipedia` config option** (default `false`) — new scraper for the team's Wikipedia season-fixtures page
+- **`buildClubSlugVariants(teamName)` helper** — produces title-case, lower-case, and `%20`-encoded slug variants used to seed Wikipedia page discovery
+- **`findWikipediaTeamPage(teamName, timeoutMs, debug)`** — uses MediaWiki's `opensearch` endpoint with raw `teamName` plus all slug variants; prefers titles containing `football | FC | association football | club`
+- **`fetchAndParseWikipedia(teamName, timeoutMs, debug)`** — orchestrates search → page fetch → parse; runs as a multi-step scraper unlike the single-fetch scrapers
+- **`parseWikipedia(html, teamName, debug)`** — header-keyword column mapper; accepts tables whose header row mentions `date|kick-off|opponent|score|venue|competition|H/A` and whose text mentions the team name; rejects past-result rows (numeric scores or `FT`); extracts time via HH:MM and am/pm; applies `isScottishNeutralFixture`; defaults European away to `17:45`
+
+### Changed
+
+- **`buildScraperUrls(teamName)`** — removed `sportsdb` entry; added `wikipedia` entry pointing at the MediaWiki `opensearch` URL with the first variant of the team name
+- **`fetchAndParseScraper(src, url, timeoutMs, debug, teamName)`** — `wikipedia` now dispatches to the new multi-step `fetchAndParseWikipedia`; `sportsdb` is no longer recognised
+- **`tryScrapersInOrder(enabled, timeoutMs, debug, teamName)`** — order is now `FWP → Wikipedia → BBC → LFOTV → CFC`; uses `scrapeFWP`, `scrapeWikipedia`, `scrapeBBC`, `scrapeLFOTV`, `scrapeCFC`
+- **`MMM-MyTeams-Fixtures.js` defaults** — removed `apiUrl`, `season`, `fallbackSeason`, `leagueIds`, `uefaLeagueIds`, `useSearchEventsFallback`, `strictLeagueFiltering`, `fallbackChain`; added `scrapeLFOTV: true`, `scrapeWikipedia: false`
+- **`getFixtures()` front-end payload** — removed all API fields and league/season filters; now sends only `maxFixtures`, `requestTimeoutMs`, `cacheTTL`, `debug`, and the five boolean scraper flags
+- **`sourceLabels` map** — removed `api`, `api+fwp`, `api+bbc`, `sportsdb`; added `wikipedia: "Wikipedia"` so the footer prints `Wikipedia` instead of the raw key
+- **Cache key** — simplified to `${source}|${teamKey}`; team-identity only (no longer includes league/season/search-fallback hash)
+- **Source auto-detection** — when `source` matches `fwp|bbc|livefootballontv|cfc|wikipedia` the module runs **only that scraper**; any other value (including the legacy `"api"` and `"sportsdb"` strings) falls through to the chain
+
+### Migration
+
+Update `config.js` for this module:
+
+| Removed | Replace with |
+|---------|--------------|
+| `source: "api"` | `source: "fwp"` (or another scraper name) |
+| `apiUrl`, `season`, `fallbackSeason` | *delete the lines* |
+| `leagueIds`, `uefaLeagueIds`, `useSearchEventsFallback`, `strictLeagueFiltering`, `fallbackChain` | *delete the lines* |
+| `scrapeSportsDB` | `scrapeWikipedia` or remove |
+
+Minimal working configuration after upgrade:
+
+```javascript
+config: {
+  teamName: "Celtic",
+  source: "fwp",
+  scrapeFWP: true,
+  scrapeWikipedia: true,
+  scrapeBBC: false,
+  scrapeLFOTV: false,
+  scrapeCFC: false,
+  updateInterval: 10 * 60 * 1000,
+  cacheTTL: 5 * 60 * 1000,
+  debug: false
+}
+```
+
+### Footnotes
+
+- **`teamId` is no longer required** — the module only ever reads `teamName` for URL construction and identifying the team. The `teamId` config field is kept as an inert history marker to avoid breaking older config files, but it has no effect on any code path.
+- The data directory contains `data/TheSportsDB_TeamID.csv` and `data/football_teams_database.csv` which are no longer used by the module. They are kept for backward compatibility with the documentation and may be removed in a future release.
+- Failure to remove the legacy options will not crash the module — they will be silently ignored.
+
+---
+
+## [1.4.0] - 2026-04-16
+
+### Added
+
+#### Venue Indicator Customization
+- **New configuration options** for full venue indicator theming:
+  - `venueHomeColor`, `venueHomeBackground` — Customize Home match indicator colors
+  - `venueAwayColor`, `venueAwayBackground` — Customize Away match indicator colors
+  - `venueNeutralColor`, `venueNeutralBackground` — Customize Neutral venue indicator colors
+- **Accessibility improvements**: Venue indicators now use distinct shapes (circle for Home, square for Away, dashed square for Neutral) instead of relying solely on color for differentiation
+- **Theme overrides**: Venue colors are applied as CSS custom properties via `_applyThemeOverrides()` for runtime theming support
+
+### Changed
+
+- **Venue display**: Replaced Unicode arrows (`▲ H` / `▽ A`) with simple text indicators (`H`, `A`, `N`) wrapped in styled `<span>` elements with classes `venue-home`, `venue-away`, `venue-neutral`
+- **CSS styling**: Added new rules in `MMM-MyTeams-Fixtures.css` for venue indicator shapes and colors, ensuring accessibility compliance
+
+### Technical Details
+
+#### Files Modified
+- **`MMM-MyTeams-Fixtures.js`**: Added venue color defaults to `defaults` object; updated `_applyThemeOverrides()` to push venue colors as CSS variables; refactored DOM generation to use new venue indicator structure
+- **`MMM-MyTeams-Fixtures.css`**: Added `.venue-home`, `.venue-away`, `.venue-neutral` styles with distinct shapes and customizable colors
+
+#### Backward Compatibility
+- Venue indicators default to previous visual appearance (green Home, red Away, blue Neutral) with new shape differentiation
+- Existing configurations work without modification
+
+---
+
 ## [1.3.1] - 2026-03-21
 
 ### Fixed

@@ -1,12 +1,9 @@
 /*
  * node_helper for MMM-MyTeams-Fixtures
- * Primary: TheSportsDB API
- * Secondary: Scrapers (sportsdb site, fwp, bbc, livefootballontv, cfc) when enabled and needed
+ * Scrapers only: fwp, bbc, livefootballontv, cfc, wikipedia
  *
- * - Auto season detection ("auto") with fallbackSeason
- * - Team ID resolution (/searchteams.php) when teamId is not provided
- * - Rate limiting + retry/backoff for API
  * - Memory + disk cache
+ * - Shared request manager handles rate-limiting + retries
  */
 const SharedRequestManager = require("./shared-request-manager.js");
 const requestManager = SharedRequestManager.getInstance();
@@ -220,37 +217,6 @@ async function doFetch(url, options = {}, timeoutMs = 15000) {
     throw err;
   }
 }
-// Helpers: throttle and retry for TheSportsDB free tier
-const MIN_API_INTERVAL_MS = 1200;
-let lastApiAt = 0;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function rateLimitWait() {
-  const now = Date.now();
-  const wait = Math.max(0, MIN_API_INTERVAL_MS - (now - lastApiAt));
-  if (wait > 0) await sleep(wait);
-  lastApiAt = Date.now();
-}
-async function apiFetchWithRetry(url, options = {}, timeoutMs = 20000, retries = 2) {
-  let delay = 800;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      await rateLimitWait();
-      return await doFetch(url, options, timeoutMs);
-    } catch (err) {
-      const msg = String(err.message || "");
-      if ((/429|timeout|ECONN|ENOTFOUND/i).test(msg) && attempt < retries) {
-        const jitter = Math.floor(Math.random() * 300);
-        const wait = delay + jitter;
-        console.warn(`[MyTeams:helper] API retry ${attempt + 1}/${retries} after ${wait}ms due to: ${msg}`);
-        await sleep(wait);
-        delay *= 2;
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
 // Competition classification to support client filtering/styling
 function classifyCompetition(name) {
   if (!name) return "domestic";
@@ -266,6 +232,40 @@ function classifyCompetition(name) {
   // Domestic league markers (helps when idLeague is missing)
   if (/(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(n)) return "domestic";
   return "domestic";
+}
+
+/**
+ * Checks if a fixture is a Scottish Cup/League Cup Final or Semi-Final,
+ * which are played at neutral venues (Hampden Park usually).
+ */
+function isScottishNeutralFixture(competition, extraText) {
+  const c = (competition || "").toLowerCase();
+  const e = (extraText || "").toLowerCase();
+
+  // Match Scottish Cup or League Cup (including various sponsorship names)
+  const isScottishCup = c.includes("scottish cup") || e.includes("scottish cup") ||
+                        c.includes("scottish fa cup") || e.includes("scottish fa cup");
+  const isLeagueCup = c.includes("league cup") || e.includes("league cup") || 
+                      c.includes("viaplay cup") || e.includes("viaplay cup") ||
+                      c.includes("premier sports cup") || e.includes("premier sports cup");
+
+  if (!(isScottishCup || isLeagueCup)) return false;
+
+  // Final, Semi-Final, Semi Final
+  // Also treat "Scottish FA Cup" or "Scottish Cup" as neutral if it's the very last match of May (heuristic for Finals if not explicitly named)
+  const isFinalOrSemi = /\b(final|semi-final|semi final)\b/i.test(c) || /\b(final|semi-final|semi final)\b/i.test(e);
+  
+  // The user specifically mentioned 23rd May. If it's Scottish Cup in late May, it's likely the Final.
+  // But let's be more explicit: if it's Scottish FA Cup and not a league game, and it's May, it's likely the final.
+  if (isFinalOrSemi) return true;
+  
+  // If the competition is exactly "Scottish FA Cup" or "Scottish Cup" (without "Premiership" etc)
+  // and it's May, we'll assume it's the final as requested for the 23rd May case.
+  if (isScottishCup && (c === "scottish fa cup" || c === "scottish cup")) {
+     return true; 
+  }
+
+  return false;
 }
 
 // Utility: normalize text for opponent extraction
@@ -315,466 +315,7 @@ function extractDateTimeFallback(allText) {
 }
 
 /* ---------------------------
- * API integration (primary)
- * ---------------------------
- */
-
-// Convert dateText like "Sun 21 Sep" or "21 Sep" to ISO using season (e.g., 2025-2026)
-function inferISOFromDateText(dateText, seasonStr) {
-  try {
-    if (!dateText) return null;
-    const txt = String(dateText).replace(/\s+/g, ' ').trim();
-    const m = txt.match(/^(?:[A-Za-z]{3,9}\s+)?(\d{1,2})\s+([A-Za-z]{3,9})(?:\s+(\d{4}))?$/);
-    if (!m) return null;
-    const day = parseInt(m[1], 10);
-    const monName = m[2].toLowerCase().slice(0,3);
-    const yearExplicit = m[3] ? parseInt(m[3], 10) : null;
-    const monMap = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-    const month = monMap[monName];
-    if (!month || !day || day < 1 || day > 31) return null;
-    let year = yearExplicit;
-    if (!year) {
-      const s = String(seasonStr || '').match(/^(\d{4})-(\d{4})$/);
-      if (s) {
-        const y1 = parseInt(s[1],10);
-        const y2 = parseInt(s[2],10);
-        year = (month >= 7) ? y1 : y2; // Jul-Dec -> first year, Jan-Jun -> second year
-      } else {
-        // Fallback: pick current year sensibly by month
-        const now = new Date();
-        const cy = now.getFullYear();
-        year = (month >= 7 && now.getMonth()+1 < 7) ? cy-1 : cy;
-      }
-    }
-    return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-  } catch (_) { return null; }
-}
-
-// Auto-detect season like "2025-2026"
-function resolveSeasonAuto(now = new Date()) {
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
-  if (m >= 7) return `${y}-${y + 1}`;
-  return `${y - 1}-${y}`;
-}
-
-// Resolve team ID via /searchteams.php if needed (uses generic scoring for any team)
-async function resolveTeamIdIfNeeded(apiUrl, teamName, providedTeamId, timeoutMs, debug = false) {
-  const safeId = String(providedTeamId || "").trim();
-  if (safeId) return safeId;
-  if (!teamName) throw new Error("No teamName or teamId provided");
-
-  const url = `${apiUrl}/searchteams.php?t=${encodeURIComponent(teamName)}`;
-  const res = await apiFetchWithRetry(url, {}, timeoutMs);
-  const data = await res.json();
-  const teams = Array.isArray(data?.teams) ? data.teams : [];
-  if (!teams.length) throw new Error("Team ID resolution failed (no candidates)");
-
-  // Score candidates - generic scoring that works for any team
-  const lname = teamName.toLowerCase();
-  const scored = teams.map(t => {
-    const name = (t?.strTeam || "").toLowerCase();
-    const alt = (t?.strAlternate || "").toLowerCase();
-    const country = (t?.strCountry || "").toLowerCase();
-    const city = (t?.strStadiumLocation || "").toLowerCase();
-    const id = String(t?.idTeam || "");
-    let score = 0;
-    // Exact match gets highest score
-    if (name === lname) score += 100;
-    // Partial match in team name
-    if (name.includes(lname)) score += 50;
-    // Partial match in alternate name
-    if (alt.includes(lname)) score += 40;
-    // If provided teamId matches, strongly prefer it
-    if (providedTeamId && id === String(providedTeamId)) score += 200;
-    return { t, score };
-  }).sort((a,b) => b.score - a.score);
-
-  const best = scored[0]?.t;
-  if (debug) {
-    const dbg = scored.slice(0,5).map(s => ({ id: s.t?.idTeam, name: s.t?.strTeam, country: s.t?.strCountry, alt: s.t?.strAlternate, score: s.score }));
-    console.log("[MyTeams:helper] Team candidates:", dbg);
-  }
-  if (!best?.idTeam) throw new Error("Team ID resolution failed (no best)");
-  return String(best.idTeam);
-}
-
-// Always resolve team ID from name (ignores providedTeamId)
-async function resolveTeamIdByName(apiUrl, teamName, timeoutMs) {
-  if (!teamName) throw new Error("No teamName provided");
-  const url = `${apiUrl}/searchteams.php?t=${encodeURIComponent(teamName)}`;
-  const res = await apiFetchWithRetry(url, {}, timeoutMs);
-  const data = await res.json();
-  const team = Array.isArray(data?.teams) ? data.teams.find(t => (t?.strTeam || "").toLowerCase() === teamName.toLowerCase()) : null;
-  return team?.idTeam ? String(team.idTeam) : null;
-}
-
-// Convert TheSportsDB event into front-end fixture shape
-function toFixtureFromEvent(e, teamName = "Celtic") {
-  const home = e?.strHomeTeam || "";
-  const away = e?.strAwayTeam || "";
-  const league = e?.strLeague || "";
-  const tv = e?.strTVStation || "";
-
-  let opponent = "";
-  let homeAway = null;
-  if (home.toLowerCase().includes(teamName.toLowerCase())) {
-    opponent = away || "TBD";
-    homeAway = "H";
-  } else if (away.toLowerCase().includes(teamName.toLowerCase())) {
-    opponent = home || "TBD";
-    homeAway = "A";
-  } else {
-    opponent = home && away ? `${home} / ${away}` : (home || away || "TBD");
-    homeAway = null;
-  }
-
-  const dateISO = e?.dateEvent || null; // "YYYY-MM-DD"
-  // Normalize time to HH:MM (strip seconds if present)
-  let timeText = e?.strTime || (e?.strTimestamp ? new Date(e.strTimestamp).toTimeString().slice(0,5) : "");
-  if (timeText && /^\d{1,2}:\d{2}:\d{2}$/.test(timeText)) {
-    timeText = timeText.slice(0,5);
-  }
-
-  return {
-    date: dateISO,
-    dateText: dateISO || "",
-    timeText: timeText || "",
-    opponent,
-    homeAway,
-    competition: league || "",
-    competitionType: classifyCompetition(league),
-    tv: tv || "",
-    status: e?.strStatus || null,
-    homeScore: (e?.intHomeScore != null && e.intHomeScore !== "") ? Number(e.intHomeScore) : null,
-    awayScore: (e?.intAwayScore != null && e.intAwayScore !== "") ? Number(e.intAwayScore) : null
-  };
-}
-
-// Fetch next events; if empty, fall back to season fixtures
-async function getFixturesFromAPI({
-  apiUrl,
-  teamId,
-  teamName,
-  season,
-  fallbackSeason,
-  requestTimeoutMs = 20000,
-  maxFixtures = 24,
- leagueIds = [],
-  uefaLeagueIds = [],
-  useSearchEventsFallback = true,
-  strictLeagueFiltering = false,
-  debug = false
-}) {
-  if (!apiUrl) throw new Error("apiUrl not provided");
-  const resolvedTeamId = await resolveTeamIdIfNeeded(apiUrl, teamName, teamId, requestTimeoutMs, debug);
-  if (debug) console.log(`[MyTeams:helper] API: resolvedTeamId=${resolvedTeamId}, teamName=${teamName}`);
-
-  // Step 1: /eventsnext.php
-  const nextUrl = `${apiUrl}/eventsnext.php?id=${encodeURIComponent(resolvedTeamId)}`;
-  if (debug) console.log("[MyTeams:helper] API GET", nextUrl);
-  try {
-    const res = await apiFetchWithRetry(nextUrl, {}, requestTimeoutMs);
-    const data = await res.json();
-    const events = Array.isArray(data?.events) ? data.events : [];
-
-    if (debug) {
-      const total = events.length;
-      const h = events.filter(e => String(e?.idHomeTeam||"") === String(resolvedTeamId)).length;
-      const a = events.filter(e => String(e?.idAwayTeam||"") === String(resolvedTeamId)).length;
-      console.log(`[MyTeams:helper] Next-events: total=${total}, home=${h}, away=${a}`);
-    }
-
-    // Filter by teamId and league IDs with optional strict mode
-    let filteredEvents = events.filter(e => {
-      const idHome = String(e?.idHomeTeam || "");
-      const idAway = String(e?.idAwayTeam || "");
-      const leagueId = String(e?.idLeague || "");
-      const leagueName = (e?.strLeague || "").toLowerCase();
-      const isHome = idHome === String(resolvedTeamId);
-      const isAway = idAway === String(resolvedTeamId);
-      const isTeamMatch = isHome || isAway;
-      const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
-      const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
-      const leagueOk = strictLeagueFiltering
-        ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
-        : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
-      // Always keep clear away matches; apply league filter more leniently for away if metadata is weak
-      const keep = isTeamMatch && (leagueOk || (isAway && (!leagueId && !leagueName)));
-      return keep;
-    });
-    if (filteredEvents.length === 0 && !strictLeagueFiltering) {
-      filteredEvents = events.filter(e => String(e?.idHomeTeam || "") === String(resolvedTeamId) || String(e?.idAwayTeam || "") === String(resolvedTeamId));
-    }
-
-    if (debug) {
-      const total = filteredEvents.length;
-      const h = filteredEvents.filter(e => String(e?.idHomeTeam||"") === String(resolvedTeamId)).length;
-      const a = filteredEvents.filter(e => String(e?.idAwayTeam||"") === String(resolvedTeamId)).length;
-      const sampleAway = filteredEvents.filter(e => String(e?.idAwayTeam||"") === String(resolvedTeamId)).slice(0,2).map(e => ({
-        ev: e?.strEvent,
-        idLeague: e?.idLeague,
-        strLeague: e?.strLeague
-      }));
-      console.log(`[MyTeams:helper] Next-events (after filter): total=${total}, home=${h}, away=${a}`, sampleAway);
-    }
-
-    // Sort by date/time ascending
-    filteredEvents.sort((a,b) => {
-      const ta = Date.parse(a?.strTimestamp || `${a?.dateEvent || '9999-12-31'}T${(a?.strTime || '23:59')}:00`);
-      const tb = Date.parse(b?.strTimestamp || `${b?.dateEvent || '9999-12-31'}T${(b?.strTime || '23:59')}:00`);
-      return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-    });
-
-    let collected = filteredEvents.map(e => toFixtureFromEvent(e, teamName));
-    
-    if (debug) {
-      const awayFromNext = collected.filter(f => f.homeAway === 'A').length;
-      console.log(`[MyTeams:helper] ✓ eventsnext.php returned ${collected.length} fixtures (${awayFromNext} away)`);
-    }
-    
-    // If we don't have enough from "next", supplement from season lists
-    if (collected.length < maxFixtures) {
-      try {
-        const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
-        const fallbackStr = fallbackSeason || resolveSeasonAuto();
-        const more1 = await fetchSeason(seasonStr);
-        if (Array.isArray(more1) && more1.length) {
-          const awayFromSeason = more1.filter(f => f.homeAway === 'A').length;
-          if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${seasonStr}) returned ${more1.length} fixtures (${awayFromSeason} away)`);
-          collected.push(...more1);
-        }
-        if (collected.length < maxFixtures) {
-          const more2 = await fetchSeason(fallbackStr);
-          if (Array.isArray(more2) && more2.length) {
-            const awayFromFallback = more2.filter(f => f.homeAway === 'A').length;
-            if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${fallbackStr}) returned ${more2.length} fixtures (${awayFromFallback} away)`);
-            collected.push(...more2);
-          }
-        }
-      } catch (_) { /* ignore supplement errors */ }
-      // Dedupe by composite key
-      const seen = new Set();
-      collected = collected.filter(f => {
-        const key = `${f.date}|${f.timeText}|${f.opponent}|${f.homeAway}|${f.competition}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-    collected.sort((a,b) => {
-      const ta = Date.parse(`${a.date || '9999-12-31'}T${(a.timeText || '23:59')}:00`);
-      const tb = Date.parse(`${b.date || '9999-12-31'}T${(b.timeText || '23:59')}:00`);
-      return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-    });
-    if (collected.length > 0) {
-      const totalAway = collected.slice(0, maxFixtures).filter(f => f.homeAway === 'A').length;
-      if (debug) console.log(`[MyTeams:helper] ✓ FINAL from eventsnext+eventsseason: ${collected.length} fixtures (${totalAway} away) - RETURNING`);
-      return collected.slice(0, maxFixtures);
-    }
-  } catch (e) {
-    console.warn("[MyTeams:helper] Next-events fetch failed:", e.message);
-  }
-
-  // Step 2: /eventsseason.php (auto season or fallback)
-  const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
-  const fallbackStr = fallbackSeason || resolveSeasonAuto();
-
-  // PERF-005: accepts optional idOverride so fetchSeasonAlt (alt-team-id path) can reuse this function
-  async function fetchSeason(s, idOverride) {
-    const id = idOverride !== undefined ? String(idOverride) : String(resolvedTeamId);
-    const url = `${apiUrl}/eventsseason.php?id=${encodeURIComponent(id)}&s=${encodeURIComponent(s)}`;
-    if (debug) console.log("[MyTeams:helper] API GET", url);
-    const res = await apiFetchWithRetry(url, {}, requestTimeoutMs);
-    const data = await res.json();
-    const events = Array.isArray(data?.events) ? data.events : [];
-    const todayISO = new Date().toISOString().slice(0,10);
-
-    if (debug) {
-      const total = events.length;
-      const h = events.filter(e => String(e?.idHomeTeam||"") === id).length;
-      const a = events.filter(e => String(e?.idAwayTeam||"") === id).length;
-      console.log(`[MyTeams:helper] Season-events(${s}): total=${total}, home=${h}, away=${a}`);
-    }
-
-    // Keep only matches for the resolved team and in desired leagues (if idLeague present)
-    let desired = events.filter(e => {
-      const idHome = String(e?.idHomeTeam || "");
-      const idAway = String(e?.idAwayTeam || "");
-      const leagueId = String(e?.idLeague || "");
-      const leagueName = (e?.strLeague || "").toLowerCase();
-      const isHome = idHome === id;
-      const isAway = idAway === id;
-      const isTeamMatch = isHome || isAway;
-      const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
-      const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
-      const leagueOk = strictLeagueFiltering
-        ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
-        : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
-      const keep = isTeamMatch && (leagueOk || (isAway && (!leagueId && !leagueName)));
-      return keep && (e?.dateEvent || "") >= todayISO;
-    });
-    if (desired.length === 0 && !strictLeagueFiltering) {
-      desired = events.filter(e => {
-        const idHome = String(e?.idHomeTeam || "");
-        const idAway = String(e?.idAwayTeam || "");
-        return (idHome === id || idAway === id) && (e?.dateEvent || "") >= todayISO;
-      });
-    }
-
-    // Sort by date/time ascending
-    desired.sort((a,b) => {
-      const ta = Date.parse(a?.strTimestamp || `${a?.dateEvent || '9999-12-31'}T${(a?.strTime || '23:59')}:00`);
-      const tb = Date.parse(b?.strTimestamp || `${b?.dateEvent || '9999-12-31'}T${(b?.strTime || '23:59')}:00`);
-      return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-    });
-
-    return desired.map(e => toFixtureFromEvent(e, teamName)).slice(0, maxFixtures);
-  }
-
-  try {
-    const seasonFixtures = await fetchSeason(seasonStr);
-    if (seasonFixtures.length > 0) {
-      const awayCount = seasonFixtures.filter(f => f.homeAway === 'A').length;
-      if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${seasonStr}) standalone returned ${seasonFixtures.length} fixtures (${awayCount} away) - RETURNING`);
-      return seasonFixtures;
-    }
-  } catch (e) {
-    console.warn(`[MyTeams:helper] Season (${seasonStr}) fetch failed:`, e.message);
-  }
-
-  try {
-    const fbFixtures = await fetchSeason(fallbackStr);
-    if (fbFixtures.length > 0) {
-      const awayCount = fbFixtures.filter(f => f.homeAway === 'A').length;
-      if (debug) console.log(`[MyTeams:helper] ✓ eventsseason.php (${fallbackStr}) fallback returned ${fbFixtures.length} fixtures (${awayCount} away) - RETURNING`);
-      return fbFixtures;
-    }
-  } catch (e) {
-    console.warn(`[MyTeams:helper] Fallback season (${fallbackStr}) fetch failed:`, e.message);
-  }
-
-  // Fallback: Search events by name pattern for season (TEAM_vs_* and *_vs_TEAM)
-  if (teamName && useSearchEventsFallback) {
-    try {
-      const nameVariants = [teamName, `${teamName} FC`, `Glasgow ${teamName}`];
-      const patterns = [];
-      for (const n of nameVariants) {
-        patterns.push(`${n}_vs_`);
-        patterns.push(`_vs_${n}`);
-      }
-      let searchEvents = [];
-      for (const pat of patterns) {
-        const url = `${apiUrl}/searchevents.php?e=${encodeURIComponent(pat)}&s=${encodeURIComponent(seasonStr)}`;
-        if (debug) console.log("[MyTeams:helper] API GET", url);
-        const res = await apiFetchWithRetry(url, {}, requestTimeoutMs);
-        const data = await res.json();
-        const ev = Array.isArray(data?.event) ? data.event : [];
-        searchEvents.push(...ev);
-      }
-      // Dedupe by idEvent (or fallback composite key)
-      const seen = new Set();
-      const merged = searchEvents.filter(e => {
-        const id = String(e?.idEvent || `${e?.strEvent}-${e?.dateEvent}-${e?.strTime}`);
-        if (seen.has(id)) return false;
-        seen.add(id);
-        return true;
-      });
-      const todayISO = new Date().toISOString().slice(0,10);
-      if (debug) {
-        const total = merged.length;
-        const h = merged.filter(e => String(e?.idHomeTeam||"") === String(resolvedTeamId) || (e?.strHomeTeam||"").toLowerCase().includes(teamName.toLowerCase())).length;
-        const a = merged.filter(e => String(e?.idAwayTeam||"") === String(resolvedTeamId) || (e?.strAwayTeam||"").toLowerCase().includes(teamName.toLowerCase())).length;
-        console.log(`[MyTeams:helper] Search-events: total=${total}, home~=${h}, away~=${a}`);
-      }
-      let desired = merged.filter(e => {
-        const home = (e?.strHomeTeam || "").toLowerCase();
-        const away = (e?.strAwayTeam || "").toLowerCase();
-        const t = teamName.toLowerCase();
-        const involved = home.includes(t) || away.includes(t);
-        const isAway = away.includes(t);
-        const leagueId = String(e?.idLeague || "");
-        const leagueName = (e?.strLeague || "").toLowerCase();
-        const knownDomestic = /(scottish|spfl|premiership|league cup|viaplay|premier sports|english|efl|championship)/i.test(leagueName);
-        const knownUEFA = /(uefa|champions|europa|conference)/i.test(leagueName);
-        const keepLeague = strictLeagueFiltering
-          ? (leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA)
-          : (!leagueId ||leagueIds.includes(leagueId) || uefaLeagueIds.includes(leagueId) || knownDomestic || knownUEFA);
-        return involved && (keepLeague || (isAway && (!leagueId && !leagueName))) && (e?.dateEvent || "") >= todayISO;
-      });
-      if (desired.length === 0 && !strictLeagueFiltering) {
-        desired = merged.filter(e => {
-          const involved = (e?.strHomeTeam || "").toLowerCase().includes(teamName.toLowerCase()) ||
-                           (e?.strAwayTeam || "").toLowerCase().includes(teamName.toLowerCase());
-          return involved && (e?.dateEvent || "") >= todayISO;
-        });
-      }
-      desired.sort((a,b) => {
-        const ta = Date.parse(a?.strTimestamp || `${a?.dateEvent || '9999-12-31'}T${(a?.strTime || '23:59')}:00`);
-        const tb = Date.parse(b?.strTimestamp || `${b?.dateEvent || '9999-12-31'}T${(b?.strTime || '23:59')}:00`);
-        return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-      });
-      const fx = desired.map(e => toFixtureFromEvent(e, teamName)).slice(0, maxFixtures);
-      if (fx.length > 0) {
-        const awayCount = fx.filter(f => f.homeAway === 'A').length;
-        if (debug) console.log(`[MyTeams:helper] ✓ searchevents.php returned ${fx.length} fixtures (${awayCount} away) - RETURNING`);
-        return fx;
-      }
-    } catch (e) {
-      console.warn("[MyTeams:helper] searchevents fallback failed:", e.message);
-    }
-  }
-
-  // Last resort: re-resolve team ID by name and retry once (guards against wrong teamId in config)
-  if (teamName) {
-    try {
-      const altId = await resolveTeamIdByName(apiUrl, teamName, requestTimeoutMs);
-      if (altId && String(altId) !== String(resolvedTeamId)) {
-        if (debug) console.log(`[MyTeams:helper] Retrying with altTeamId=${altId} (resolved by name)`);
-
-        // Step A: /eventsnext.php for altId
-        try {
-          const nextUrl2 = `${apiUrl}/eventsnext.php?id=${encodeURIComponent(altId)}`;
-          if (debug) console.log("[MyTeams:helper] API GET", nextUrl2);
-          const res2 = await apiFetchWithRetry(nextUrl2, {}, requestTimeoutMs);
-          const data2 = await res2.json();
-          const events2 = Array.isArray(data2?.events) ? data2.events : [];
-          let filtered2 = events2.filter(e => String(e?.idHomeTeam||"") === String(altId) || String(e?.idAwayTeam||"") === String(altId));
-          filtered2.sort((a,b) => {
-            const ta = Date.parse(a?.strTimestamp || `${a?.dateEvent || '9999-12-31'}T${(a?.strTime || '23:59')}:00`);
-            const tb = Date.parse(b?.strTimestamp || `${b?.dateEvent || '9999-12-31'}T${(b?.strTime || '23:59')}:00`);
-            return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-          });
-          const fx2 = filtered2.map(e => toFixtureFromEvent(e, teamName)).slice(0, maxFixtures);
-          if (fx2.length > 0) return fx2;
-        } catch (e) {
-          console.warn("[MyTeams:helper] Next-events altId fetch failed:", e.message);
-        }
-
-        // Step B: /eventsseason.php for altId — reuses fetchSeason with idOverride (PERF-005)
-        try {
-          const sfx = await fetchSeason(seasonStr, altId);
-          if (sfx.length > 0) return sfx;
-        } catch (e) {
-          console.warn(`[MyTeams:helper] Season (alt, ${seasonStr}) fetch failed:`, e.message);
-        }
-        try {
-          const sfx2 = await fetchSeason(fallbackStr, altId);
-          if (sfx2.length > 0) return sfx2;
-        } catch (e) {
-          console.warn(`[MyTeams:helper] Fallback season (alt, ${fallbackStr}) fetch failed:`, e.message);
-        }
-      }
-    } catch (e) {
-      if (debug) console.warn("[MyTeams:helper] alt teamId resolution failed:", e.message);
-    }
-  }
-
-  return [];
-}
-
-/* ---------------------------
- * Scrapers (secondary)
+ * Scrapers (only source)
  * ---------------------------
  */
 
@@ -792,21 +333,39 @@ const KNOWN_CFC_SLUGS = new Set([
   "newcastle", "barcelona", "ajax", "porto", "benfica"
 ]);
 
+// Known Wikipedia name conventions for football clubs used as slug seeds
+// When the simple slug fails, fetchAndParseScraper will fall back to the Wikipedia search API.
+function buildClubSlugVariants(teamName) {
+  const safe = sanitizeTeamName(teamName);
+  if (!safe) return [];
+  const base = safe.replace(/\./g, "").trim();
+  const titleCase = base.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+  const lower = base.toLowerCase();
+  const variants = new Set();
+  if (titleCase) variants.add(titleCase.replace(/\s+/g, "_"));
+  if (lower)     variants.add(lower.replace(/\s+/g, "_"));
+  if (titleCase) variants.add(titleCase.replace(/\s+/g, "%20"));
+  return Array.from(variants);
+}
+
 // Dynamic URL builder for scrapers - uses teamName and teamId from config
 function buildScraperUrls(teamName, teamId) {
   const safe = sanitizeTeamName(teamName);
   if (!safe) {
     console.error(`[MyTeams:helper] SEC-002: teamName "${teamName}" contains unsafe characters — scraper URLs blocked`);
-    return { fwp: null, sportsdb: null, bbc: null, livefootballontv: null, cfc: null };
+    return { fwp: null, bbc: null, livefootballontv: null, cfc: null, wikipedia: null };
   }
   const slug = safe.toLowerCase().replace(/\s+/g, "-");
-  const safeId = String(teamId || "133647").replace(/[^0-9a-zA-Z\-_]/g, "");
+  const wikiVariants = buildClubSlugVariants(teamName);
+  const wikiSearch = wikiVariants.length
+    ? `https://en.wikipedia.org/w/index.php?search=${wikiVariants[0]}&title=Special%3ASearch&ns0=1`
+    : null;
   return {
     fwp: `https://www.footballwebpages.co.uk/${encodeURIComponent(slug)}/fixtures-results`,
-    sportsdb: `https://www.thesportsdb.com/team/${encodeURIComponent(safeId)}-${encodeURIComponent(slug)}`,
     bbc: `https://www.bbc.co.uk/sport/football/teams/${encodeURIComponent(slug)}/scores-fixtures`,
     livefootballontv: `https://www.live-footballontv.com/${encodeURIComponent(slug)}-on-tv.html`,
-    cfc: KNOWN_CFC_SLUGS.has(slug) ? `https://www.${slug}fc.com/fixtures` : null
+    cfc: KNOWN_CFC_SLUGS.has(slug) ? `https://www.${slug}fc.com/fixtures` : null,
+    wikipedia: wikiSearch
   };
 }
 
@@ -852,10 +411,15 @@ function parseLiveFootball(html, teamName = "Celtic") {
     }
 
     let opponent = null, homeAway = null;
-    const vs1 = allText.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
+    const vs1 = allText.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)`, 'i'));
     const vs2 = allText.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
     if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
     else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
+
+    // Override for Scottish Cup/League Cup neutral venues
+    if (isScottishNeutralFixture(comp, allText)) {
+      homeAway = "N";
+    }
 
     // Skip past results
     const isResult = /\b\d+\s*-\s*\d+\b/.test(allText) || /\bFT\b/i.test(allText) || /Full\s*Time/i.test(allText);
@@ -898,8 +462,14 @@ function parseBBC(html, teamName = "Celtic") {
     const away = $(el).find(".sp-c-fixture__team--away .sp-c-fixture__team-name, .sp-c-fixture__team--away .qa-full-team-name").text().trim();
 
     let opponent = null; let homeAway = null;
-    if (new RegExp(`^${teamPattern}$`, 'i').test(home)) { opponent = away; homeAway = "H"; }
-    else if (new RegExp(`^${teamPattern}$`, 'i').test(away)) { opponent = home; homeAway = "A"; }
+    if (new RegExp(teamPattern, 'i').test(home)) { opponent = away; homeAway = "H"; }
+    else if (new RegExp(teamPattern, 'i').test(away)) { opponent = home; homeAway = "A"; }
+
+    // Override for Scottish Cup/League Cup neutral venues
+    const allText = $(el).text().replace(/\s+/g, ' ').trim();
+    if (isScottishNeutralFixture(comp, allText)) {
+      homeAway = "N";
+    }
 
     let iso = null;
     if (/^\d{4}-\d{2}-\d{2}/.test(datetimeAttr)) iso = datetimeAttr;
@@ -956,196 +526,181 @@ function parseBBC(html, teamName = "Celtic") {
 }
 
 // FootballWebPages HTML parser
+// FWP uses a structured table: Date | H/A | Opponent | Competition | KO/Score | Attd | Scorers
 function parseFWP(html, teamName = "Celtic", debug = false) {
   const $ = cheerio.load(html);
   const fixtures = [];
-  let lastDateText = ""; // Track date across rows in case of headers
-  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
-  $(".fixture, .fixtures .match, table tr").each((i, el) => {
-    let dateText = $(el).find(".date, .fixture-date, td.date, time").first().text().trim();
-    if (dateText) lastDateText = dateText;
-    else dateText = lastDateText;
 
-    let timeText = $(el).find(".time, td.time").first().text().trim();
-    const comp = $(el).find(".competition, td.competition").first().text().trim();
+  // --- Step 1: Locate the fixtures table by finding an explicit H/A header column ---
+  let fixturesTable = null;
+  let dateCol = 0, haCol = 1, opponentCol = 2, compCol = 3, koCol = 4;
 
-    // Use a space-preserving text extraction to prevent smashed tokens
-    const allText = $(el).find("*").addBack().contents().filter((_,n) => n.nodeType===3).get().map(n => n.data).join(" ").replace(/\s+/g, " ").trim();
-    if (!dateText || !timeText) {
-      const fb = extractDateTimeFallback(allText);
-      if (!dateText) dateText = fb.dateText || dateText;
-      if (!timeText) timeText = fb.timeText || timeText;
-      // Repair malformed times like 25:45pm/45:45pm/55:45pm/75:45pm
-      if (/^(?:25|45|55|75):45pm$/i.test(timeText)) {
-        const lastDigit = timeText.charAt(1); // 5 in 25:45pm → 5:45pm
-        timeText = `${lastDigit}:45pm`;
-      }
-      // Normalize 12h to 24h for display when minutes exist
-      const m12 = timeText.match(/^(\d{1,2}):(\d{2})(am|pm)$/i);
-      if (m12) {
-        let hh = parseInt(m12[1], 10);
-        const mm = m12[2];
-        const ap = m12[3].toLowerCase();
-        if (ap === 'pm' && hh < 12) hh += 12;
-        if (ap === 'am' && hh === 12) hh = 0;
-        timeText = `${String(hh).padStart(2,'0')}:${mm}`;
-      }
-      // Normalize plain 8pm -> 20:00
-      const m12b = timeText.match(/^(\d{1,2})(am|pm)$/i);
-      if (m12b) {
-        let hh = parseInt(m12b[1], 10);
-        const ap = m12b[2].toLowerCase();
-        if (ap === 'pm' && hh < 12) hh += 12;
-        if (ap === 'am' && hh === 12) hh = 0;
-        timeText = `${String(hh).padStart(2,'0')}:00`;
-      }
+  $("table").each((_, tbl) => {
+    const headerRow = $(tbl).find("tr").first();
+    const headers = headerRow.find("th, td").map((_, th) => $(th).text().trim().toLowerCase()).get();
+    if (headers.some(h => /^h\s*\/\s*a$/i.test(h))) {
+      fixturesTable = tbl;
+      headers.forEach((h, i) => {
+        if (h === "date") dateCol = i;
+        else if (/^h\s*\/\s*a$/i.test(h)) haCol = i;
+        else if (h === "opponent") opponentCol = i;
+        else if (h === "competition") compCol = i;
+        else if (/^ko|score/i.test(h) && !/scorer/i.test(h)) koCol = i;
+      });
+      return false;
     }
+  });
 
-    // Extract teams from generic "A v B" pattern and infer H/A for configured team
-    let opponent = null; let homeAway = null;
-    const teamPair = allText.match(/([A-Za-z0-9 .&':\-]+)\s+v(?:s\.?)*\s+([A-Za-z0-9 .&':\-]+)/i);
-    if (teamPair) {
-      const t1 = teamPair[1].trim();
-      const t2 = teamPair[2].trim();
-      const teamRegex = new RegExp(teamPattern, 'i');
-      if (teamRegex.test(t1) && !teamRegex.test(t2)) { opponent = sanitizeOpponent(t2); homeAway = "H"; }
-      else if (teamRegex.test(t2) && !teamRegex.test(t1)) { opponent = sanitizeOpponent(t1); homeAway = "A"; }
-    }
-    // Fallback specific patterns without end-of-line constraint
-    if (!opponent) {
-      const vs1 = allText.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@\\-(]+)`, 'i'));
-      const vs2 = allText.match(new RegExp(`([^|@\\-(]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
-      if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
-      else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
-    }
-    // Heuristic: compact H/A directly after date e.g. "Sat 21 FebH..." or "...A..."
-    if (!homeAway && dateText) {
-      const pos = allText.indexOf(dateText);
-      if (pos >= 0) {
-        const tail = allText.slice(pos + dateText.length).trim();
-        const haCompact = tail.match(/^([HA])(?=[A-Z])/);
-        if (haCompact) homeAway = haCompact[1];
+  // Fallback: find table where rows have a lone "H" or "A" cell in column 1
+  if (!fixturesTable) {
+    $("table tr").each((_, row) => {
+      const cells = $(row).find("td");
+      if (cells.length >= 4 && /^[HA]$/.test($(cells[1]).text().trim())) {
+        fixturesTable = $(row).closest("table")[0];
+        return false;
       }
-    }
-    // Heuristic: use anchor texts for opponent if present
-    if (!opponent) {
-      const links = $(el).find('a').map((_, a) => $(a).text().replace(/\s+/g,' ').trim()).get();
-      const teamRegex = new RegExp(teamPattern, 'i');
-      const cand = (links || []).find(t => t && /[A-Za-z]/.test(t) && !teamRegex.test(t) && !/fixtures|results|table|news/i.test(t));
-      if (cand) {
-        opponent = sanitizeOpponent(cand);
-        // Infer H/A by order of appearance in the row text
-        const idxC = allText.toLowerCase().indexOf(teamName.toLowerCase());
-        const idxO = allText.toLowerCase().indexOf(cand.toLowerCase());
-        if (idxC >= 0 && idxO >= 0) homeAway = idxC < idxO ? 'H' : 'A';
-      }
-    }
-    // Heuristic: if still empty, try tokens near configured team
-    if (!opponent) {
-      const mAfter = allText.match(new RegExp(`${teamPattern}[^A-Za-z0-9]+([^,|@\\-\\(]{2,40})`, 'i'));
-      const mBefore = allText.match(new RegExp(`([^,|@\\-\\(]{2,40})[^A-Za-z0-9]+${teamPattern}`, 'i'));
-      const teamRegex = new RegExp(teamPattern, 'i');
-      if (mAfter && !teamRegex.test(mAfter[1])) { opponent = sanitizeOpponent(mAfter[1]); homeAway = 'H'; }
-      else if (mBefore && !teamRegex.test(mBefore[1])) { opponent = sanitizeOpponent(mBefore[1]); homeAway = 'A'; }
-    }
+    });
+  }
 
-    // Skip past results by detecting scores or FT markers
-    const isResult = /\b\d+\s*-\s*\d+\b/.test(allText) || /\bFT\b/i.test(allText) || /Full\s*Time/i.test(allText);
+  // --- Step 2: Parse table rows cell-by-cell ---
+  if (fixturesTable) {
+    if (debug) console.log("[MyTeams:helper] FWP: structured table found — using cell-based parser");
+    $(fixturesTable).find("tr").each((_, row) => {
+      const cells = $(row).find("td");
+      if (cells.length < 4) return;
 
-    if (!isResult && (opponent || dateText || timeText)) {
-      // Force 17:45 for European away matches (UK local time)
-      if ((!timeText || !/^[0-2]?\d:\d{2}$/.test(timeText)) && classifyCompetition(comp) === 'european' && homeAway === 'A') {
-        timeText = '17:45';
-      } else if (classifyCompetition(comp) === 'european' && homeAway === 'A' && /(am|pm)$/i.test(timeText)) {
-        timeText = '17:45';
+      const rawDate  = $(cells[dateCol]).text().replace(/\s+/g, " ").trim();
+      const ha       = $(cells[haCol]).text().trim().toUpperCase();
+      const oppRaw   = $(cells[opponentCol]).text().replace(/\s+/g, " ").trim();
+      const comp     = cells[compCol] ? $(cells[compCol]).text().replace(/\s+/g, " ").trim() : "";
+      const koRaw    = cells[koCol]  ? $(cells[koCol]).text().replace(/\s+/g, " ").trim()  : "";
+
+      let homeAway = (ha === "H" || ha === "A" || ha === "N") ? ha : null;
+      
+      // Override for Scottish Cup/League Cup neutral venues
+      if (isScottishNeutralFixture(comp, oppRaw)) {
+        homeAway = "N";
       }
+
+      if (!homeAway) return;
+
+      // Skip past results (contain a score like "1 - 0")
+      if (/\b\d+\s*-\s*\d+\b/.test(koRaw) || /\bFT\b/i.test(koRaw)) return;
+
+      // Normalise KO time — FWP formats: "5.30pm", "12pm", "8pm", "17:45", "12.30pm"
+      let timeText = "";
+      const tA = koRaw.match(/(\d{1,2})[.:](\d{2})\s*(am|pm)?/i);
+      const tB = !tA && koRaw.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+      if (tA) {
+        let hh = parseInt(tA[1], 10);
+        const mm = tA[2];
+        const ap = (tA[3] || "").toLowerCase();
+        if (ap === "pm" && hh < 12) hh += 12;
+        if (ap === "am" && hh === 12) hh = 0;
+        timeText = `${String(hh).padStart(2, "0")}:${mm}`;
+      } else if (tB) {
+        let hh = parseInt(tB[1], 10);
+        const ap = tB[2].toLowerCase();
+        if (ap === "pm" && hh < 12) hh += 12;
+        if (ap === "am" && hh === 12) hh = 0;
+        timeText = `${String(hh).padStart(2, "0")}:00`;
+      }
+
+      const opponent = sanitizeOpponent(oppRaw);
+      if (!opponent && !rawDate) return;
 
       const item = {
         date: null,
-        dateText,
+        dateText: rawDate,
         timeText,
         opponent: opponent || "TBD",
-        homeAway,
+        homeAway: homeAway,
         competition: comp,
         competitionType: classifyCompetition(comp),
         tv: ""
       };
-      if (debug) {
-        if (!opponent || !timeText || !homeAway) {
-          console.log("[MyTeams:helper] FWP raw text", i, allText);
-        }
-        console.log("[MyTeams:helper] FWP row", i, JSON.stringify(item));
-      }
+      if (debug) console.log("[MyTeams:helper] FWP row:", JSON.stringify(item));
       fixtures.push(item);
-    }
-  });
-  return fixtures;
-}
+    });
+    return fixtures;
+  }
 
-// TheSportsDB team page (site) parser
-function parseSportsDB(html, teamName = "Celtic") {
-  const $ = cheerio.load(html);
-  const fixtures = [];
-  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex special chars
-  const teamRegex = new RegExp(teamPattern, 'i');
-  $("*").each((_, el) => {
-    const block = $(el).text().replace(/\s+/g, " ").trim();
-    if (!teamRegex.test(block) || !/v(?:s\.)?/i.test(block)) return;
+  // --- Step 3: Legacy text-pattern fallback (non-FWP sites that use "Team v Team" format) ---
+  if (debug) console.log("[MyTeams:helper] FWP: no structured table — falling back to text pattern parser");
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let lastDateText = "";
+  $(".fixture, .fixtures .match, table tr, li").each((i, el) => {
+    const allText = $(el).find("*").addBack().contents().filter((_, n) => n.nodeType === 3).get()
+      .map(n => n.data).join(" ").replace(/\s+/g, " ").trim();
+    if (!allText || allText.length < 5) return;
 
-    let { dateText, timeText } = extractDateTimeFallback(block);
-    // Normalize/repair time as per FWP
-    if (/^(?:25|45|55|75):45pm$/i.test(timeText)) {
-      const lastDigit = timeText.charAt(1);
-      timeText = `${lastDigit}:45pm`;
+    let dateText = $(el).find(".date, .fixture-date, td.date, time").first().text().trim();
+    if (dateText) lastDateText = dateText;
+    else dateText = lastDateText;
+    if (!dateText) {
+      const fb = extractDateTimeFallback(allText);
+      dateText = fb.dateText || "";
     }
-    const m12 = String(timeText||"").match(/^(\d{1,2}):(\d{2})(am|pm)$/i);
+
+    const { timeText: rawTime } = extractDateTimeFallback(allText);
+    let timeText = rawTime || "";
+    const m12 = timeText.match(/^(\d{1,2}):(\d{2})(am|pm)$/i);
     if (m12) {
       let hh = parseInt(m12[1], 10);
-      const mm = m12[2];
-      const ap = m12[3].toLowerCase();
-      if (ap === 'pm' && hh < 12) hh += 12;
-      if (ap === 'am' && hh === 12) hh = 0;
-      timeText = `${String(hh).padStart(2,'0')}:${mm}`;
+      if (m12[3].toLowerCase() === "pm" && hh < 12) hh += 12;
+      if (m12[3].toLowerCase() === "am" && hh === 12) hh = 0;
+      timeText = `${String(hh).padStart(2, "0")}:${m12[2]}`;
     }
-    const m12b = String(timeText||"").match(/^(\d{1,2})(am|pm)$/i);
+    const m12b = !m12 && timeText.match(/^(\d{1,2})(am|pm)$/i);
     if (m12b) {
       let hh = parseInt(m12b[1], 10);
-      const ap = m12b[2].toLowerCase();
-      if (ap === 'pm' && hh < 12) hh += 12;
-      if (ap === 'am' && hh === 12) hh = 0;
-      timeText = `${String(hh).padStart(2,'0')}:00`;
+      if (m12b[2].toLowerCase() === "pm" && hh < 12) hh += 12;
+      if (m12b[2].toLowerCase() === "am" && hh === 12) hh = 0;
+      timeText = `${String(hh).padStart(2, "0")}:00`;
     }
 
-    let opponent = null, homeAway = null;
-    const vs1 = block.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
-    const vs2 = block.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
-    if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
-    else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
-
-    // Skip past results if block includes scores/FT
-    const isResult = /\b\d+\s*-\s*\d+\b/.test(block) || /\bFT\b/i.test(block) || /Full\s*Time/i.test(block);
-    if (!isResult && (opponent || dateText || timeText)) {
-      // Force 17:45 for European away (cannot reliably detect competition from SportsDB site, so leave unless pattern present)
-      let competition = "";
-      const compMatch = block.match(/(Europa|UEFA|Conference|Champions League)/i);
-      const compType = compMatch ? 'european' : 'domestic';
-      if ((!timeText || /(am|pm)$/i.test(timeText) || !/^\d{1,2}:\d{2}$/.test(timeText)) && compType === 'european' && homeAway === 'A') {
-        timeText = '17:45';
+    // Detect lone H/A cell in any <td>
+    let homeAway = null;
+    $(el).find("td").each((_, td) => {
+      if (/^[HA]$/.test($(td).text().trim())) {
+        homeAway = $(td).text().trim().toUpperCase();
+        return false;
       }
+    });
 
+    let opponent = null;
+    if (!homeAway) {
+      const tp = allText.match(/([A-Za-z0-9 .&':\-]+)\s+v(?:s?\.?)\s+([A-Za-z0-9 .&':\-]+)/i);
+      if (tp) {
+        const t1 = tp[1].trim(), t2 = tp[2].trim();
+        const rg = new RegExp(teamPattern, "i");
+        if (rg.test(t1) && !rg.test(t2)) { opponent = sanitizeOpponent(t2); homeAway = "H"; }
+        else if (rg.test(t2) && !rg.test(t1)) { opponent = sanitizeOpponent(t1); homeAway = "A"; }
+      }
+    }
+    if (homeAway && !opponent) {
+      // Try link text as opponent
+      const links = $(el).find("a").map((_, a) => $(a).text().replace(/\s+/g, " ").trim()).get();
+      const rg = new RegExp(teamPattern, "i");
+      const cand = links.find(t => t && /[A-Za-z]/.test(t) && !rg.test(t) && !/fixtures|results|table|news/i.test(t));
+      if (cand) opponent = sanitizeOpponent(cand);
+    }
+
+    const isResult = /\b\d+\s*-\s*\d+\b/.test(allText) || /\bFT\b/i.test(allText);
+    if (!isResult && homeAway && (opponent || dateText)) {
       fixtures.push({
         date: null,
         dateText,
         timeText,
         opponent: opponent || "TBD",
         homeAway,
-        competition,
-        competitionType: compType,
+        competition: "",
+        competitionType: "domestic",
         tv: ""
       });
     }
   });
-  return fixtures.slice(0, 12);
+  return fixtures;
 }
 
 // Team site generic parser (e.g., celticfc.com, rangersfc.com, etc.)
@@ -1184,7 +739,7 @@ function parseCFC(html, teamName = "Celtic") {
 
     let opponent = null, homeAway = null;
 
-    const vs1 = block.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)$`, 'i'));
+    const vs1 = block.match(new RegExp(`${teamPattern}\\s+v(?:s\\.)?\\s+([^|@(\\-]+)`, 'i'));
     const vs2 = block.match(new RegExp(`([^|@(\\-]+)\\s+v(?:s\\.)?\\s+${teamPattern}`, 'i'));
     if (vs1) { opponent = sanitizeOpponent(vs1[1]); homeAway = "H"; }
     else if (vs2) { opponent = sanitizeOpponent(vs2[1]); homeAway = "A"; }
@@ -1192,6 +747,12 @@ function parseCFC(html, teamName = "Celtic") {
     let competition = "";
     const compMatch = block.match(/\b(UEFA [^|]+|Champions League|Europa Conference League|Europa League|Scottish [^|]+|SPFL [^|]+|Premiership|League Cup|Scottish Cup)\b/i);
     if (compMatch) competition = compMatch[1];
+
+    // Override for Scottish Cup/League Cup neutral venues
+    if (isScottishNeutralFixture(competition, block)) {
+      homeAway = "N";
+    }
+
     const compType = classifyCompetition(competition);
 
     // Skip past results
@@ -1215,11 +776,159 @@ function parseCFC(html, teamName = "Celtic") {
   return fixtures.slice(0, 12);
 }
 
+// Wikipedia fixtures parser
+// Wikipedia season articles contain wikitable tables with Date / Opponent / Venue / Score / Competition columns.
+// The team page may also have a "Season-by-season results" table or current-season highlights table.
+function parseWikipedia(html, teamName = "Celtic", debug = false) {
+  const $ = cheerio.load(html);
+  const fixtures = [];
+  const teamLower = String(teamName).toLowerCase();
+  const teamPattern = String(teamName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Step 1: Look at every <table> on the page; pick tables that mention the team AND look like fixtures
+  $("table").each((_, tbl) => {
+    const $tbl = $(tbl);
+    const tblText = $tbl.text().toLowerCase();
+    if (!tblText.includes(teamLower)) return;
+
+    const $rows = $tbl.find("tr");
+    if ($rows.length < 2) return;
+
+    // Inspect header row for column hints [date | opponent/score/venue/competition | time]
+    const $headRow = $rows.first();
+    const headerTexts = $headRow.find("th, td").map((_, c) => $(c).text().trim().toLowerCase()).get();
+    const looksLikeFixtures = headerTexts.some(h => /date|opponent|opposition|score|result|venue|ground|stadium|competition|league|tournament|kick|k\.o\.|ha|h\/a/.test(h))
+      || /(\bkick[-\s]?off\b|\bdate\b)/i.test(String(tblText).slice(0, 400));
+    if (!looksLikeFixtures) return;
+
+    // Map column indices
+    const colDate = headerTexts.findIndex(h => /\bdate\b/.test(h));
+    const colTime = headerTexts.findIndex(h => /kick[-\s]?off|k\.o\.|time/.test(h));
+    const colCompetition = headerTexts.findIndex(h => /competition|league|round|tournament|cup/.test(h));
+    const colVenueHA = headerTexts.findIndex(h => /venue|ground|stadium|h\s*\/\s*a|^ha$/.test(h));
+    const colScore = headerTexts.findIndex(h => /score|result|outcome/.test(h));
+    const colOpponent = headerTexts.findIndex(h => /opponent|opposition|team/.test(h));
+
+    $rows.each((rowIdx, row) => {
+      if (rowIdx === 0) return;
+      const $cells = $(row).find("td");
+      if ($cells.length < 2) return;
+      const cellTexts = $cells.map((_, td) => $(td).text().replace(/\s+/g, " ").trim()).get();
+      const fullText  = cellTexts.join(" | ");
+
+      // Skip past results — contain a numeric score or FT
+      if (colScore >= 0 && /\d+/.test(cellTexts[colScore] || "")) {
+        // If score column present and contains numbers, treat as result row
+        const scoreTxt = String(cellTexts[colScore] || "");
+        if (/^\d+\s*[-–:]\s*\d+$/.test(scoreTxt)) return;
+      }
+      if (/\b\d+\s*[-–]\s*\d+\b/.test(fullText) || /\bFT\b/i.test(fullText)) return;
+
+      let dateText = colDate >= 0 ? (cellTexts[colDate] || "") : "";
+      let timeText = colTime >= 0 ? (cellTexts[colTime] || "") : "";
+      let competition = colCompetition >= 0 ? (cellTexts[colCompetition] || "") : "";
+      const venueHA = colVenueHA >= 0 ? (cellTexts[colVenueHA] || "").trim().toUpperCase() : "";
+      const opponentCell = colOpponent >= 0 ? (cellTexts[colOpponent] || "") : "";
+
+      // Extract opponent and home/away
+      let opponent = null;
+      let homeAway = null;
+
+      const vsTeam = fullText.match(new RegExp(`\\b${teamPattern}\\b\\s+(?:v|vs\\.?)\\s+([^|\\(\\)\\[\\]]+?)(?:,|$|\\s)`, "i"));
+      const teamVs = fullText.match(new RegExp(`([^|\\(\\)\\[\\]]+?)\\s+(?:v|vs\\.?)\\s+\\b${teamPattern}\\b`, "i"));
+      if (vsTeam) { opponent = sanitizeOpponent(vsTeam[1]); homeAway = "H"; }
+      else if (teamVs) { opponent = sanitizeOpponent(teamVs[1]); homeAway = "A"; }
+
+      // Explicit H/A from the venue column
+      if (!homeAway && /^[HA]$/.test(venueHA)) homeAway = venueHA;
+
+      // If opponent is empty but cell looks like a team name (has letters, no "v"/"vs")
+      if (!opponent && opponentCell && !/(v\.?\s+|^v$)/i.test(opponentCell)) {
+        opponent = sanitizeOpponent(opponentCell);
+      }
+
+      // Extract time from any cell if not already set
+      if (!timeText) {
+        const tA = fullText.match(/\b(\d{1,2}):(\d{2})\b/);
+        const tB = fullText.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+        if (tA) timeText = `${tA[1]}:${tA[2]}`;
+        else if (tB) {
+          let hh = parseInt(tB[1], 10);
+          const ap = tB[2].toLowerCase();
+          if (ap === 'pm' && hh < 12) hh += 12;
+          if (ap === 'am' && hh === 12) hh = 0;
+          timeText = `${String(hh).padStart(2, "0")}:00`;
+        }
+      }
+
+      // Override for Scottish Cup/League Cup neutral venues
+      if (isScottishNeutralFixture(competition, fullText)) {
+        homeAway = "N";
+      }
+
+      if (!opponent) return;
+      if (!homeAway) {
+        // default to "H" when no signal — keeps record visible but flagged
+        homeAway = "H";
+      }
+
+      const compType = classifyCompetition(competition || fullText);
+      if ((!timeText || /(am|pm)$/i.test(timeText) || !/^\d{1,2}:\d{2}$/.test(timeText)) && compType === 'european' && homeAway === 'A') {
+        timeText = '17:45';
+      }
+
+      fixtures.push({
+        date: null,
+        dateText: dateText || "",
+        timeText: timeText || "",
+        opponent,
+        homeAway,
+        competition: competition || "",
+        competitionType: compType,
+        tv: ""
+      });
+    });
+  });
+
+  if (debug) console.log(`[MyTeams:helper] Wikipedia: parsed ${fixtures.length} raw fixture(s)`);
+  return fixtures.slice(0, 60);
+}
+
+// Resolve a Wikipedia team page title by searching the MediaWiki opensearch API
+async function findWikipediaTeamPage(teamName, timeoutMs, debug) {
+  const variants = buildClubSlugVariants(teamName);
+  if (!variants.length) return null;
+  const queries = [teamName, ...variants.map(v => String(v).replace(/_/g, " ").replace(/%20/g, " "))];
+  for (const q of queries) {
+    if (!q) continue;
+    try {
+      const apiUrl = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}&limit=10&namespace=0&format=json`;
+      const res = await doFetch(apiUrl, {}, timeoutMs);
+      const data = await res.json();
+      const titles = Array.isArray(data && data[1]) ? data[1] : [];
+      if (!titles.length) continue;
+      // Prefer football team title
+      const regex = /(football|\bf\.?c\.?\b|^cfc\b|association football|club)/i;
+      let chosen = titles.find(t => regex.test(t));
+      if (!chosen) chosen = titles[0];
+      if (debug) console.log(`[MyTeams:helper] Wikipedia search for "${q}" returned ${titles.length} titles, chose: ${chosen}`);
+      return chosen;
+    } catch (e) {
+      if (debug) console.warn(`[MyTeams:helper] Wikipedia search for "${q}" failed:`, e.message);
+    }
+  }
+  return null;
+}
+
 // Fetch + parse for a given scraper source
 async function fetchAndParseScraper(sourceKey, teamName, teamId, timeoutMs, debug = false) {
   const src = String(sourceKey || "").toLowerCase().trim();
   const mapKey = (src === "lfotv" || src === "livefootballontv") ? "livefootballontv" : src;
-  
+
+  if (mapKey === "wikipedia") {
+    return await fetchAndParseWikipedia(teamName, timeoutMs, debug);
+  }
+
   // Build dynamic URLs based on teamName and teamId
   const dynamicUrls = buildScraperUrls(teamName, teamId);
   const url = dynamicUrls[mapKey] || dynamicUrls.fwp;
@@ -1235,17 +944,29 @@ async function fetchAndParseScraper(sourceKey, teamName, teamId, timeoutMs, debu
     case "fwp": default: return parseFWP(html, teamName, debug);
     case "bbc": return parseBBC(html, teamName);
     case "cfc": return parseCFC(html, teamName);
-    case "sportsdb": return parseSportsDB(html, teamName);
     case "livefootballontv": return parseLiveFootball(html, teamName);
   }
 }
 
-// Try secondary sources in order if enabled
+// Wikipedia fetch is multi-step (search API + page fetch). Handle separately.
+async function fetchAndParseWikipedia(teamName, timeoutMs, debug = false) {
+  const title = await findWikipediaTeamPage(teamName, timeoutMs, debug);
+  if (!title) {
+    if (debug) console.warn(`[MyTeams:helper] Wikipedia: no team page found for "${teamName}"`);
+    return [];
+  }
+  const pageUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
+  if (debug) console.log(`[MyTeams:helper] Wikipedia GET ${pageUrl}`);
+  const res = await doFetch(pageUrl, {}, timeoutMs);
+  const html = await res.text();
+  return parseWikipedia(html, teamName, debug);
+}
+
+// Try scrapers in order if enabled
 async function tryScrapersInOrder(flags, teamName, teamId, timeoutMs, debug) {
   const order = [];
-  // Prefer FWP first as requested
   if (flags.scrapeFWP) order.push("fwp");
-  if (flags.scrapeSportsDB) order.push("sportsdb");
+  if (flags.scrapeWikipedia) order.push("wikipedia");
   if (flags.scrapeBBC) order.push("bbc");
   if (flags.scrapeLFOTV) order.push("livefootballontv");
   if (flags.scrapeCFC) order.push("cfc");
@@ -1306,52 +1027,32 @@ module.exports = NodeHelper.create({
       source,
       teamName,
       teamId,
-      apiUrl,
-      season,
-      fallbackSeason,
-     leagueIds = [],
-      uefaLeagueIds = [],
       maxFixtures,
       cacheTTL = 300000,
       requestTimeoutMs = 15000,
       debug = false,
-      fallbackChain = true,
-
-      // new API fallback and filtering flags
-      useSearchEventsFallback = true,
-      strictLeagueFiltering = false,
 
       // scraper flags
-      
       scrapeFWP = true,
       scrapeLFOTV = true,
-      scrapeSportsDB = true,
+      scrapeWikipedia = true,
       scrapeBBC = true,
       scrapeCFC = true
     } = payload || {};
 
-    const normalizedSource = String(source || "api").toLowerCase().trim();
+    const normalizedSource = String(source || "fwp").toLowerCase().trim();
 
-    // SEC-004: Validate apiUrl before use — must be https:// and target thesportsdb.com
-    const ALLOWED_API_HOSTNAME = "www.thesportsdb.com";
-    try {
-      const parsedApiUrl = new URL(apiUrl);
-      if (parsedApiUrl.protocol !== "https:" || parsedApiUrl.hostname !== ALLOWED_API_HOSTNAME) {
-        this.sendSocketNotification("FIXTURES_ERROR", {
-          message: `Invalid apiUrl: must be https://${ALLOWED_API_HOSTNAME}/...`
-        });
-        return;
-      }
-    } catch (urlErr) {
+    // Validate teamName — scrapers build URLs from it (SEC-002)
+    if (!sanitizeTeamName(teamName)) {
       this.sendSocketNotification("FIXTURES_ERROR", {
-        message: `Invalid apiUrl: ${urlErr.message}`
+        message: "Invalid teamName — scraper sources require a safe string."
       });
       return;
     }
 
-    // Cache key to avoid cross-team leakage and respect filtering flags
+    // Cache key to avoid cross-team leakage (used by both single source mode and chained mode)
     const teamKey = String((teamId && String(teamId).trim()) ? String(teamId).trim() : (teamName || "")).toLowerCase();
-    const cacheKey = `${normalizedSource}|${teamKey}|${(leagueIds||[]).join(',')}|${(uefaLeagueIds||[]).join(',')}|${strictLeagueFiltering?'strict':'loose'}|${useSearchEventsFallback?'searchOn':'searchOff'}`;
+    const cacheKey = `${normalizedSource}|${teamKey}`;
 
     // Serve cache if valid and key matches
     if (cache.data && Array.isArray(cache.data) && cache.data.length > 0 && cache.key === cacheKey && (Date.now() - cache.ts) < (cache.ttl || cacheTTL)) {
@@ -1365,15 +1066,16 @@ module.exports = NodeHelper.create({
     }
 
     const sendSuccess = (fixtures, usedSource) => {
+      const trimmed = (typeof maxFixtures === "number" && maxFixtures > 0) ? fixtures.slice(0, maxFixtures) : fixtures;
       cache.ts = Date.now();
       cache.ttl = cacheTTL;
       cache.source = usedSource;
       cache.key = cacheKey;
-      cache.data = fixtures;
+      cache.data = trimmed;
       saveCacheToDisk(cacheTTL);
 
       this.sendSocketNotification("FIXTURES_DATA", {
-        fixtures,
+        fixtures: trimmed,
         fetchedAt: new Date(cache.ts).toISOString(),
         usedSource
       });
@@ -1384,135 +1086,30 @@ module.exports = NodeHelper.create({
     };
 
     try {
-      // Primary path: API
-      if (normalizedSource === "api") {
-        if (!fetchInitialized || !_fetchImpl) throw new Error("Fetch API not available");
+      if (!fetchInitialized || !_fetchImpl) throw new Error("Fetch API not available");
 
-        const fixtures = await getFixturesFromAPI({
-          apiUrl,
-          teamId,
-          teamName,
-          season,
-          fallbackSeason,
-          requestTimeoutMs,
-          maxFixtures,
-         leagueIds,
-          uefaLeagueIds,
-          useSearchEventsFallback,
-          strictLeagueFiltering,
-          debug
-        });
+      const flags = { scrapeFWP, scrapeLFOTV, scrapeWikipedia, scrapeBBC, scrapeCFC };
 
-        if (Array.isArray(fixtures) && fixtures.length > 0) {
-          // If API returned no away fixtures, supplement with FWP scraper away fixtures
-          const apiAway = fixtures.filter(f => f.homeAway === "A").length;
-          if (apiAway === 0) {
-            try {
-              const { fixtures: fwpFx } = await tryScrapersInOrder(
-                { scrapeFWP: true, scrapeSportsDB: false, scrapeBBC: true, scrapeLFOTV: true, scrapeCFC: false },
-                teamName,
-                teamId,
-                requestTimeoutMs,
-                debug
-              );
-              // Normalize FWP dates into ISO using season string so away items sort/display
-              const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
-              const fwpAway = Array.isArray(fwpFx) ? fwpFx.filter(f => f.homeAway === "A").map(f => ({
-                ...f,
-                date: f.date || inferISOFromDateText(f.dateText, seasonStr)
-              })) : [];
-              if (debug) console.log(`[MyTeams:helper] Supplement with FWP: apiAway=${apiAway}, fwpAway=${fwpAway.length}`);
-              if (fwpAway.length) {
-                // Merge + dedupe
-                const merged = [...fixtures, ...fwpAway];
-                const seen = new Set();
-                const deduped = merged.filter(f => {
-                  const key = `${f.date}|${f.timeText}|${(f.opponent||"").toLowerCase()}|${f.homeAway}|${(f.competition||"").toLowerCase()}`;
-                  if (seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                });
-                deduped.sort((a,b) => {
-                  const ta = Date.parse(`${a.date || '9999-12-31'}T${(a.timeText || '23:59')}:00`);
-                  const tb = Date.parse(`${b.date || '9999-12-31'}T${(b.timeText || '23:59')}:00`);
-                  return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-                });
-                const limited = typeof maxFixtures === 'number' ? deduped.slice(0, maxFixtures) : deduped;
-                if (debug) console.log(`[MyTeams:helper] Supplemented fixtures merged=${limited.length}`);
-                sendSuccess(limited, "api+fwp");
-                return;
-              }
-            } catch (e) {
-              console.warn("[MyTeams:helper] FWP supplement failed:", e.message);
-            }
-          }
-
-          // If API returned no European fixtures (common for knockout draws), supplement from BBC
-          const apiEuro = fixtures.filter(f => (f.competitionType || '').toLowerCase() === 'european').length;
-          if (apiEuro === 0) {
-            try {
-              const { fixtures: bbcFx } = await tryScrapersInOrder(
-                { scrapeBBC: true, scrapeFWP: false, scrapeLFOTV: false, scrapeSportsDB: false, scrapeBBC: true, scrapeCFC: false },
-                teamName,
-                teamId,
-                requestTimeoutMs,
-                debug
-              );
-              const seasonStr = season === "auto" ? resolveSeasonAuto() : (season || resolveSeasonAuto());
-              const bbcEuro = Array.isArray(bbcFx) ? bbcFx.filter(f => (f.competitionType || '').toLowerCase() === 'european').map(f => ({
-                ...f,
-                date: f.date || inferISOFromDateText(f.dateText, seasonStr)
-              })) : [];
-              if (bbcEuro.length) {
-                const merged = [...fixtures, ...bbcEuro];
-                const seen = new Set();
-                const deduped = merged.filter(f => {
-                  const key = `${f.date}|${f.timeText}|${(f.opponent||"").toLowerCase()}|${f.homeAway}|${(f.competition||"").toLowerCase()}`;
-                  if (seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                });
-                deduped.sort((a,b) => {
-                  const ta = Date.parse(`${a.date || '9999-12-31'}T${(a.timeText || '23:59')}:00`);
-                  const tb = Date.parse(`${b.date || '9999-12-31'}T${(b.timeText || '23:59')}:00`);
-                  return (isNaN(ta) ? Infinity : ta) - (isNaN(tb) ? Infinity : tb);
-                });
-                const limited = typeof maxFixtures === 'number' ? deduped.slice(0, maxFixtures) : deduped;
-                if (debug) console.log(`[MyTeams:helper] Supplemented European fixtures from BBC: ${bbcEuro.length}, merged=${limited.length}`);
-                sendSuccess(limited, "api+bbc");
-                return;
-              }
-            } catch (e) {
-              console.warn("[MyTeams:helper] BBC supplement failed:", e.message);
-            }
-          }
-
-          sendSuccess(fixtures, "api");
-          return;
-        }
-
-        if (fallbackChain) {
-          if (debug) console.log("[MyTeams:helper] API returned empty; trying scrapers (secondary)...");
-          const { fixtures: sfx, source: ssrc } = await tryScrapersInOrder(
-            { scrapeFWP, scrapeLFOTV, scrapeSportsDB,  scrapeBBC,  scrapeCFC },
-            teamName,
-            teamId,
-            requestTimeoutMs,
-            debug
-          );
-          if (Array.isArray(sfx) && sfx.length > 0) {
-            sendSuccess(sfx, ssrc);
+      // When the chosen source is itself a known scraper, run that scraper directly.
+      const directSources = new Set(["fwp", "wikipedia", "bbc", "cfc", "livefootballontv", "lfotv"]);
+      if (directSources.has(normalizedSource)) {
+        const src = normalizedSource === "lfotv" ? "livefootballontv" : normalizedSource;
+        try {
+          const list = await fetchAndParseScraper(src, teamName, teamId, requestTimeoutMs, debug);
+          if (Array.isArray(list) && list.length) {
+            sendSuccess(list, src);
             return;
           }
+          sendError(`No upcoming fixtures from ${src} (empty or failed).`);
+        } catch (e) {
+          sendError(`${src} scrape failed: ${e.message || e}`);
         }
-
-        sendError("No upcoming fixtures (API empty and scrapers disabled or empty).");
         return;
       }
 
-      // Secondary path: scrapers only, in required order
+      // Anything else falls through to the full scraper chain (FWP -> Wikipedia -> BBC -> LFOTV -> CFC)
       const { fixtures: sfx, source: ssrc } = await tryScrapersInOrder(
-        {  scrapeFWP, scrapeLFOTV, scrapeSportsDB, scrapeBBC, scrapeCFC },
+        flags,
         teamName,
         teamId,
         requestTimeoutMs,

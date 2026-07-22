@@ -6,9 +6,9 @@ The following versions of MMM-MyTeams-Fixtures are covered by security updates:
 
 | Version | Supported | Status                                                    |
 | ------- | --------- | --------------------------------------------------------- |
-| 1.3.x   | ✅        | Active development (latest release and audit cycle)       |
-| 1.2.x   | ✅        | Security fixes only (legacy package still available)      |
-| < 1.2   | ❌        | No longer supported — upgrade to 1.3.x for current fixes  |
+| 2.0.x   | ✅        | Active development (latest release and audit cycle) — scrapers only |
+| 1.3.x   | ✅        | Security fixes only (legacy package still available) — TheSportsDB API + scrapers |
+| < 1.2   | ❌        | No longer supported — upgrade to 2.0.x for current fixes  |
 
 ## Reporting a Vulnerability
 
@@ -32,7 +32,7 @@ Please report security vulnerabilities by:
 
 When reporting a vulnerability, please include:
 
-- **Description**: Clear explanation of the vulnerability
+- **Description**: Clear explanation of the vulnerability and how to reproduce it
 - **Impact**: What an attacker could accomplish
 - **Steps to Reproduce**: Detailed, repeatable steps
 - **Affected Versions**: Which versions are impacted
@@ -74,45 +74,49 @@ npm audit fix
 npm update
 ```
 
-### Configuration Security
+### Configuration Security (v2.0.0)
 
-- **Disable debug mode in production** by setting `debug: false` and `debugSensitiveData: false` in `config.js`
-- **Lock `apiUrl` to TheSportsDB** when overriding the default; the helper rejects any value that is not `https://www.thesportsdb.com/...`
-- **Restrict scraper sources** to the trusted hosts listed in the repo (TheSportsDB, FootballWebPages, LiveFootballOnTV, club-specific pages) and avoid enabling unused scrapers
-- **Enable `strictLeagueFiltering`** whenever possible to avoid displaying fixtures from unexpected competitions
-- **Limit network access** via firewall rules or proxy configuration to the necessary endpoints (TheSportsDB API, FootballWebPages, LiveFootballOnTV)
+- **Disable debug mode in production** by setting `debug: false` in `config.js`
+- **Restrict scraper flags** in your config — keep only the scrapers you trust enabled (`scrapeFWP`, `scrapeWikipedia`, `scrapeBBC`, `scrapeLFOTV`, `scrapeCFC`). Don't enable unused scrapers; each one you enable will be contacted if earlier scrapers in the chain return empty.
+- **Sanitize your `teamName`** — the value is used to construct scraper URLs (FWP slug, Wikipedia slug, BBC path). Avoid unusual characters; non-alphanumeric, non-space characters may be rejected by `sanitizeTeamName()` (SEC-002).
+- **Limit network access** at the firewall if your machine has constrained egress. The known outbound hosts are: `footballwebpages.co.uk`, `en.wikipedia.org` (and `*.wikipedia.org`), `bbc.co.uk`, `live-footballontv.com`, plus optional club-specific sites used by the CFC scraper.
 
 ### Data Privacy
 
 This module:
 
-- ✅ **Does NOT** collect or transmit user data beyond public fixtures feed
-- ✅ **Does NOT** set cookies, trackers, or analytics hooks
+- ✅ **Does NOT** collect or transmit user data beyond public fixture feeds
+- ✅ **Does NOT** set cookies, trackers, or analytics hooks (although FWP returns a session cookie that is forwarded only to subsequent FWP requests within the same scrape)
 - ✅ **Does NOT** require authentication or personal API keys
-- ✅ Operates entirely on public TheSportsDB/FootballWebPages data feeds
-- ✅ Caches fixtures locally (`.cache/` directory) with permissions controlled by the host OS
+- ✅ Operates entirely on public FootballWebPages / Wikipedia / BBC Sport / LiveFootballOnTV pages
+- ✅ Caches fixtures locally (`fixtures-cache.json` in the module directory) with permissions controlled by the host OS
 
 ## Known Security Measures
 
 The module enforces the following protections:
 
 - **Shared Request Manager** (`shared-request-manager.js`)
-  - Coordinated queue with per-domain/backoff rate limiting
-  - Deduplicated in-flight requests and configurable timeouts prevent hammering upstream APIs
+  - Coordinated queue with per-domain rate limiting
+  - Deduplicated in-flight requests and configurable timeouts prevent hammering upstream sites
+  - Retries failed requests with exponential backoff
 - **URL & team sanitization**
-  - `sanitizeTeamName()` rejects unsafe characters, `buildScraperUrls()` encodes all path segments, and `KNOWN_CFC_SLUGS` limits custom sitemap scrapers
-  - `node_helper.js` enforces the trusted `https://www.thesportsdb.com/` prefix before any outbound request
+  - `sanitizeTeamName()` (SEC-002) rejects unsafe characters
+  - `buildScraperUrls()` encodes all path segments
+  - `buildClubSlugVariants()` constructs only sanitized slug variants for Wikipedia
+  - `KNOWN_CFC_SLUGS` limits the set of club sites the CFC scraper may contact
 - **DOM safety**
-  - UI rendering uses `document.createElement`, `textContent`, and `createTextNode`; there are no `innerHTML` assignments, nullifying XSS via fetched data
-  - Live score badges and countdown labels are text-only and never interpolate raw API strings
+  - UI rendering uses `document.createElement`, `textContent`, and `createTextNode` — no `innerHTML` assignments
+  - XSS via fetched data is not possible
 - **Debug logging controls**
   - Verbose logging is gated behind `debug: true`; production installs keep it disabled to avoid leaking fixture data
-  - Scroll listeners and interval handlers swallow exceptions and write only minimal console warnings
+  - Cookie and session values are not logged even in debug mode
+
+> Note: SEC-004 (TheSportsDB apiUrl-domain validator) was removed in v2.0.0 along with the API path. The legacy code that enforced `https://www.thesportsdb.com/...` no longer exists; the module only contacts the scraper hosts listed above.
 
 ## Security Audit Schedule
 
 - **Automated audits**: Run `npm audit` each time dependencies are updated
-- **Manual reviews**: Code reviews preceding every major release (e.g., 1.3.0 overhaul)
+- **Manual reviews**: Code reviews preceding every major release (e.g., 2.0.0 scraper-only overhaul)
 - **Dependency checks**: Quarterly review of `cheerio`, `node-fetch`, and transitive packages
 - **Community testing**: Responsible disclosure encouraged; dual maintenance across the MyTeams modules keeps regressions visible
 
@@ -139,12 +143,13 @@ Security vulnerabilities in:
 
 - Module code (`MMM-MyTeams-Fixtures.js`, `node_helper.js`)
 - Shared HTTP queue (`shared-request-manager.js`)
+- Scraper parsers (`parseFWP`, `parseWikipedia`, `parseBBC`, `parseLiveFootball`, `parseCFC`) and slug-construction helpers
 - Configuration parsing, caching logic, and localisation files used to render the UI
 
 ### Out of Scope
 
 - MagicMirror² core vulnerabilities (report to the MagicMirror project)
-- Third-party website vulnerabilities (report to the originating site)
+- Third-party website vulnerabilities (report to the originating site — FootballWebPages, Wikipedia, BBC, etc.)
 - Third-party module interactions beyond the MMM-MyTeams suite
 - Physical access attacks (kiosk security is the user's responsibility)
 - Social engineering attacks targeting module maintainers or users
@@ -159,11 +164,12 @@ For security-related questions or concerns:
 
 ## Version History
 
+- **2026-07-16 (2.0.0)**: Scrapers-only architecture. SEC-004 (`apiUrl` validator) removed along with the TheSportsDB API path; SEC-002 (`teamName` sanitization) retained and applied to all scraper URL construction including new Wikipedia variants.
 - **2026-03-21 (1.3.1)**: Repo-wide line-ending normalization (CRLF to LF) to ensure compatibility between Windows development and Raspberry Pi/Unix production environments.
 - **2026-03-19 (1.3.0)**: Full security review (SEC-001 through SEC-004) plus DOM hardening, `apiUrl` validation, scroll log removal, and sanitized config inputs.
 - **2026-03-18 (1.2.0)**: Added `shared-request-manager.js`, `node_helper` identity guard, and consolidated fetch handling through the queue.
 
 ---
 
-**Last Updated**: March 21, 2026  
-**Policy Version**: 1.2
+**Last Updated**: July 16, 2026  
+**Policy Version**: 2.0

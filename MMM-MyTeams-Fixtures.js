@@ -2,19 +2,16 @@
  * - Uses normalized socket notifications:
  *   send:    "GET_FIXTURES"
  *   receive: "FIXTURES_DATA" | "FIXTURES_ERROR"
+ * - Data sources: scrapers only (FWP, Wikipedia, BBC, LFOTV, CFC).
+ *   The TheSportsDB API path has been removed because the free API no longer
+ *   returns complete fixture lists.
  */
 
 Module.register("MMM-MyTeams-Fixtures", {
-  // ─────────────────────────────────────────
-  // Defaults
-  // ─────────────────────────────────────────
-  defaults: {
-    source: "api",
+    defaults: {
+    source: "fwp",
     teamName: "Celtic",
     teamId: "133647",
-    apiUrl: "https://www.thesportsdb.com/api/v1/json/3",
-    season: "auto",
-    fallbackSeason: "2025-2026",
     updateInterval: 10 * 60 * 1000,
     requestTimeoutMs: 15000,
     maxFixtures: 60,
@@ -24,15 +21,13 @@ Module.register("MMM-MyTeams-Fixtures", {
     debug: false,
 
     cacheTTL: 0 * 60 * 1000,
-    fallbackChain: true,
+    fallbackChain: false,
 
-    leagueIds: ["4330", "4364", "4363", "4888"],
-    uefaLeagueIds: ["4480", "4481", "5071"],
-
-    useSearchEventsFallback: true,
-    strictLeagueFiltering: true,
-
-    scrapeFWP: false,
+    scrapeFWP: true,
+    scrapeLFOTV: true,
+    scrapeWikipedia: true,
+    scrapeBBC: true,
+    scrapeCFC: true,
 
     maxTableHeight: 260,
     countdownIntervalMs: 60000,
@@ -43,8 +38,8 @@ Module.register("MMM-MyTeams-Fixtures", {
     autoCycleIntervalMs: 20000,
 
     cycleAll: true,
-    cycleHome: true,
-    cycleAway: true,
+    cycleHome: false,
+    cycleAway: false,
     cycleDomestic: false,
     cycleEuropean: false,
 
@@ -55,7 +50,13 @@ Module.register("MMM-MyTeams-Fixtures", {
     darkMode: null,
     fontColorOverride: null,
     opacityOverride: null,
-    accentColor: "#018749",       // DES-003: team primary colour → --mmf-accent-color
+    accentColor: "#018749",       // DES-003: team primary colour â†’ --mmf-accent-color
+    venueHomeColor: "#ffffff",
+    venueHomeBackground: "#018749",
+    venueAwayColor: "#ffffff",
+    venueAwayBackground: "#555555",
+    venueNeutralColor: "#000000",
+    venueNeutralBackground: "#add8e6",
 
     // UX-003: footer visibility
     showFooter: true,
@@ -68,9 +69,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     alertBeforeMinutes: 30
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Translation System
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   getTranslations() {
     return {
       en: "translations/en.json",
@@ -85,9 +86,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     };
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Lifecycle
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   start() {
     this.isLoading = true;
     this.errorMessage = null;
@@ -137,9 +138,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     if (this._alertTimer)     clearTimeout(this._alertTimer);
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Schedules
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   scheduleUpdate() {
     if (this._updateTimer) clearInterval(this._updateTimer);
     const every = Math.max(60 * 1000, Number(this.config.updateInterval || 600000));
@@ -205,9 +206,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     }
   },
 
-  // ─────────────────────────────────────────
-  // Styles  — DES-005: renamed to customOverrides.css
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Styles  â€” DES-005: renamed to customOverrides.css
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   getStyles() {
     return [
       this.file("MMM-MyTeams-Fixtures.css"),
@@ -215,9 +216,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     ];
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // INN-003: Multi-team helper
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   _getActiveTeamConfig() {
     if (Array.isArray(this.config.teams) && this.config.teams.length > 0) {
       const t = this.config.teams[Math.min(this._activeTeamIndex, this.config.teams.length - 1)];
@@ -236,9 +237,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     };
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Socket comms
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   getFixtures() {
     this.isLoading = true;
     this.errorMessage = null;
@@ -254,19 +255,15 @@ Module.register("MMM-MyTeams-Fixtures", {
       source:        this.config.source,
       teamName:      activeTeam.teamName,
       teamId:        activeTeam.teamId,
-      apiUrl:        this.config.apiUrl,
-      season:        this.config.season,
-      fallbackSeason: this.config.fallbackSeason,
-      leagueIds:     this.config.leagueIds,
-      uefaLeagueIds: this.config.uefaLeagueIds,
       maxFixtures:   this.config.maxFixtures,
       requestTimeoutMs: this.config.requestTimeoutMs,
       cacheTTL:      this.config.cacheTTL,
-      fallbackChain: this.config.fallbackChain,
       debug:         !!this.config.debug,
       scrapeFWP:     this.config.scrapeFWP,
-      useSearchEventsFallback: this.config.useSearchEventsFallback,
-      strictLeagueFiltering:   this.config.strictLeagueFiltering
+      scrapeLFOTV:   this.config.scrapeLFOTV,
+      scrapeWikipedia: this.config.scrapeWikipedia,
+      scrapeBBC:     this.config.scrapeBBC,
+      scrapeCFC:     this.config.scrapeCFC
     };
 
     this.sendSocketNotification("GET_FIXTURES", payload);
@@ -305,9 +302,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     }
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // INN-004: Pre-match alert
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   _scheduleAlert() {
     if (!this.config.enableAlerts) return;
     if (!Array.isArray(this.fixtures) || this.fixtures.length === 0) return;
@@ -332,8 +329,8 @@ Module.register("MMM-MyTeams-Fixtures", {
             this._alertFired.add(alertKey);
             const team = this._getActiveTeamConfig().teamName;
             this.sendNotification("SHOW_ALERT", {
-              title:   `⚽ ${team}`,
-              message: `${f.opponent} — ${this.translate("NEXT_MATCH") || "Next match"} in ${alertMinutes} min`,
+              title:   `âš½ ${team}`,
+              message: `${f.opponent} â€” ${this.translate("NEXT_MATCH") || "Next match"} in ${alertMinutes} min`,
               timer:   15000
             });
           }
@@ -343,9 +340,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     }
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Rendering
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   getDom() {
     const wrapper = document.createElement("div");
     wrapper.className = "myteams-fixtures";
@@ -366,7 +363,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     if (this.errorMessage) {
       const errDiv = document.createElement("div");
       errDiv.className = "error";
-      errDiv.textContent = `⚠ ${this.errorMessage}`;
+      errDiv.textContent = `âš  ${this.errorMessage}`;
       wrapper.appendChild(errDiv);
       return wrapper;
     }
@@ -422,17 +419,17 @@ Module.register("MMM-MyTeams-Fixtures", {
       if (cdText === "Live/Passed" && firstF.status === "In Progress") {
         badge.className = "next-match-badge live xsmall";
         const score = (firstF.homeScore != null && firstF.awayScore != null)
-          ? ` ${firstF.homeScore}–${firstF.awayScore}` : "";
-        badge.textContent = `🔴 ${this.translate("LIVE") || "LIVE"}${score}`;
+          ? ` ${firstF.homeScore}â€“${firstF.awayScore}` : "";
+        badge.textContent = `ðŸ”´ ${this.translate("LIVE") || "LIVE"}${score}`;
         leftTabs.appendChild(badge);
       } else if (cdText && cdText !== "Live/Passed") {
         badge.className = "next-match-badge xsmall";
-        badge.textContent = `⏱ ${cdText}`;
+        badge.textContent = `â± ${cdText}`;
         leftTabs.appendChild(badge);
       }
     }
 
-    // Filter tabs — ACC-001: buttons; ACC-002: aria-pressed + aria-label; UX-001: counts
+    // Filter tabs â€” ACC-001: buttons; ACC-002: aria-pressed + aria-label; UX-001: counts
     const filters = [
       { key: "all",      label: this.translate("ALL") },
       { key: "domestic", label: this.translate("DOMESTIC") },
@@ -470,40 +467,49 @@ Module.register("MMM-MyTeams-Fixtures", {
       leftTabs.appendChild(btn);
     });
 
-    // Control icons — ACC-001: buttons instead of spans
+    // Control icons â€” ACC-001: buttons instead of spans
     const refreshBtn  = document.createElement("button");
     refreshBtn.type   = "button";
-    refreshBtn.className = "refresh-btn fas fa-sync-alt small dimmed";
+    refreshBtn.className = "refresh-btn";
     refreshBtn.title  = this.translate("REFRESH_DATA");
     refreshBtn.setAttribute("aria-label", this.translate("REFRESH_DATA"));
+    const refreshIcon = document.createElement("i");
+    refreshIcon.className = "fa fa-refresh";
+    refreshBtn.appendChild(refreshIcon);
     refreshBtn.addEventListener("click", () => {
       try {
         this.getFixtures();
-        refreshBtn.classList.add("fa-spin");
-        setTimeout(() => refreshBtn.classList.remove("fa-spin"), 2000);
+        refreshIcon.classList.add("fa-spin");
+        setTimeout(() => refreshIcon.classList.remove("fa-spin"), 2000);
       } catch (e) { console.warn("[MyTeams] refresh click error:", e); }
     });
 
     const clearBtn  = document.createElement("button");
     clearBtn.type   = "button";
-    clearBtn.className = "clear-cache-btn fas fa-trash-alt small dimmed";
+    clearBtn.className = "clear-cache-btn";
     clearBtn.title  = this.translate("CLEAR_CACHE");
     clearBtn.setAttribute("aria-label", this.translate("CLEAR_CACHE"));
+    const clearIcon = document.createElement("i");
+    clearIcon.className = "fa fa-trash";
+    clearBtn.appendChild(clearIcon);
     clearBtn.addEventListener("click", () => {
       try {
         this.sendSocketNotification("CLEAR_FIXTURES_CACHE", {});
-        clearBtn.classList.add("fa-spin");
-        setTimeout(() => clearBtn.classList.remove("fa-spin"), 1500);
+        clearIcon.classList.add("fa-spin");
+        setTimeout(() => clearIcon.classList.remove("fa-spin"), 1500);
       } catch (e) { console.warn("[MyTeams] clear cache click error:", e); }
     });
 
     const pinBtn  = document.createElement("button");
     pinBtn.type   = "button";
-    pinBtn.className = `pin-btn fas fa-thumbtack small dimmed${this._isPinned ? " active" : ""}`;
+    pinBtn.className = `pin-btn${this._isPinned ? " active" : ""}`;
     pinBtn.setAttribute("aria-pressed", String(!!this._isPinned));
     const pinLabel = this._isPinned ? this.translate("UNPIN") : this.translate("PIN");
     pinBtn.title = pinLabel;
     pinBtn.setAttribute("aria-label", pinLabel);
+    const pinIcon = document.createElement("i");
+    pinIcon.className = "fa fa-thumb-tack";
+    pinBtn.appendChild(pinIcon);
     pinBtn.addEventListener("click", () => {
       try {
         this._isPinned = !this._isPinned;
@@ -556,7 +562,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     caption.textContent = `${this._getActiveTeamConfig().teamName} ${this.translate("UPCOMING_FIXTURES")}`;
     table.appendChild(caption);
 
-    // Table header — SEC-001: textContent only, no innerHTML
+    // Table header â€” SEC-001: textContent only, no innerHTML
     const thead  = document.createElement("thead");
     const hRow   = document.createElement("tr");
     const thDefs = [
@@ -575,7 +581,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     thead.appendChild(hRow);
     table.appendChild(thead);
 
-    // Table body — UX-005: tbody class for CSS fade animation targeting
+    // Table body â€” UX-005: tbody class for CSS fade animation targeting
     const tbody = document.createElement("tbody");
     tbody.className = "fixtures-tbody";
 
@@ -587,7 +593,7 @@ Module.register("MMM-MyTeams-Fixtures", {
       // INN-002: highlight live matches
       if (f.status === "In Progress") tr.classList.add("live-match");
 
-      // SEC-001: All user data via textContent — never innerHTML
+      // SEC-001: All user data via textContent â€” never innerHTML
       const tdDate = document.createElement("td");
       tdDate.className  = "col-date";
       tdDate.textContent = this.formatDateDisplay(f.date, f.dateText);
@@ -598,9 +604,9 @@ Module.register("MMM-MyTeams-Fixtures", {
       if (f.status === "In Progress" && f.homeScore != null && f.awayScore != null) {
         const pip = document.createElement("span");
         pip.className    = "live-pip";
-        pip.textContent  = "🔴 ";
+        pip.textContent  = "ðŸ”´ ";
         tdTime.appendChild(pip);
-        tdTime.appendChild(document.createTextNode(`${f.homeScore}–${f.awayScore}`));
+        tdTime.appendChild(document.createTextNode(`${f.homeScore}â€“${f.awayScore}`));
       } else {
         tdTime.textContent = f.timeText || "";
       }
@@ -609,12 +615,24 @@ Module.register("MMM-MyTeams-Fixtures", {
       tdOpp.className   = "col-opp";
       tdOpp.textContent = f.opponent || this.translate("TBD");
 
-      // ACC-003: Unicode prefix avoids colour-only differentiation for H/A
+      // ACC-003: Venue indicator (H/A/N) with customizable colors and accessibility backgrounds
       const tdHa = document.createElement("td");
       tdHa.className = "col-ha";
-      if (isHome)      tdHa.textContent = "▲ H";
-      else if (isAway) tdHa.textContent = "▽ A";
-      else             tdHa.textContent = f.homeAway || "";
+      if (isHome || isAway || f.homeAway) {
+        const spanHa = document.createElement("span");
+        spanHa.className = "venue-indicator";
+        if (isHome) {
+          spanHa.textContent = "H";
+          spanHa.classList.add("venue-home");
+        } else if (isAway) {
+          spanHa.textContent = "A";
+          spanHa.classList.add("venue-away");
+        } else {
+          spanHa.textContent = "N";
+          spanHa.classList.add("venue-neutral");
+        }
+        tdHa.appendChild(spanHa);
+      }
 
       tr.appendChild(tdDate);
       tr.appendChild(tdTime);
@@ -633,10 +651,7 @@ Module.register("MMM-MyTeams-Fixtures", {
     table.appendChild(tbody);
     scroll.appendChild(table);
 
-    // Back-to-top — ACC-001: already a button; preserved from original
-    const controls = document.createElement("div");
-    controls.className = "scroll-controls";
-
+    // Back-to-top button logic (moved to footer but defined here for visibility)
     const backToTopBtn = document.createElement("button");
     backToTopBtn.type  = "button";
     backToTopBtn.className = "btn-back-to-top";
@@ -654,14 +669,11 @@ Module.register("MMM-MyTeams-Fixtures", {
       } catch (e) { scroll.scrollTop = 0; }
     });
 
-    controls.appendChild(backToTopBtn);
-    scroll.appendChild(controls);
-
-    // PERF-002: rAF-throttled scroll listener — SEC-003: debug logs removed
+    // PERF-002: rAF-throttled scroll listener â€” SEC-003: debug logs removed
     let _scrollRaf = null;
-    const toggleControls = () => {
+    const toggleBackToTop = () => {
       try {
-        controls.classList.toggle("visible", (scroll.scrollTop || 0) > 40);
+        backToTopBtn.classList.toggle("visible", (scroll.scrollTop || 0) > 40);
       } catch (e) {
         console.warn("[MyTeams-Fixtures] scroll listener error:", e);
       }
@@ -669,26 +681,26 @@ Module.register("MMM-MyTeams-Fixtures", {
     setTimeout(() => {
       scroll.addEventListener("scroll", () => {
         if (_scrollRaf) return;
-        _scrollRaf = requestAnimationFrame(() => { toggleControls(); _scrollRaf = null; });
+        _scrollRaf = requestAnimationFrame(() => { toggleBackToTop(); _scrollRaf = null; });
       }, { passive: true });
-      toggleControls();
+      toggleBackToTop();
     }, 100);
 
     wrapper.appendChild(scroll);
 
-    // Footer — UX-002 stale indicator + UX-003 friendly labels
+    // Footer â€” UX-002 stale indicator + UX-003 friendly labels
     if (this.config.showFooter !== false) {
       const footer = document.createElement("div");
       footer.className = "source-footer xsmall center";
 
+      const sourceInfo = document.createElement("div");
+      sourceInfo.className = "source-info";
+      
       const sourceLabels = {
-        api:              "TheSportsDB",
-        "api+fwp":        "TheSportsDB + FWP",
-        "api+bbc":        "TheSportsDB + BBC Sport",
         fwp:              "Football Web Pages",
+        wikipedia:        "Wikipedia",
         bbc:              "BBC Sport",
         cfc:              "Club Site",
-        sportsdb:         "SportsDB Site",
         livefootballontv: "LiveFootballOnTV",
         cache:            "Cached",
         "cache-cleared":  "Cache Cleared"
@@ -701,23 +713,26 @@ Module.register("MMM-MyTeams-Fixtures", {
         const ageMs    = Date.now() - new Date(this.fetchedAt).getTime();
         const cacheTTL = Number(this.config.cacheTTL || 300000);
         isStale   = ageMs > cacheTTL * 1.5;
-        timeLabel = ` • ${this.formatRelativeTime(ageMs)}`;
+        timeLabel = ` â€¢ ${this.formatRelativeTime(ageMs)}`;
       }
 
-      footer.textContent = `${this.translate("SOURCE")}: ${friendlySource}${timeLabel}`;
+      sourceInfo.textContent = `${this.translate("SOURCE")}: ${friendlySource}${timeLabel}`;
       if (isStale) {
-        footer.classList.add("stale");
-        footer.textContent += " ⚠";
+        sourceInfo.classList.add("stale");
+        sourceInfo.textContent += " âš ";
       }
+      
+      footer.appendChild(sourceInfo);
+      footer.appendChild(backToTopBtn);
       wrapper.appendChild(footer);
     }
 
     return wrapper;
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Next-tab countdown helpers
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   _startNextTabCountdown(ms) {
     try {
       if (this._isPinned) return;
@@ -751,9 +766,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     this._nextTabEtaSec = null;
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Auto-cycle helpers
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   setActiveFilter(filterKey) {
     const normalized = (filterKey || "all").toLowerCase();
     if (this.config.defaultFilter === normalized) return;
@@ -820,9 +835,9 @@ Module.register("MMM-MyTeams-Fixtures", {
     return allowed.slice();
   },
 
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Helpers
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   formatDateDisplay(dateISO, dateTextFallback) {
     if (dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO)) {
       try {
@@ -889,15 +904,21 @@ Module.register("MMM-MyTeams-Fixtures", {
     return `Updated ${Math.floor(hours / 24)}d ago`;
   },
 
-  // ─────────────────────────────────────────
-  // Theme Overrides  — PERF-001: dirty-flag; DES-003: accentColor
-  // ─────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Theme Overrides  â€” PERF-001: dirty-flag; DES-003: accentColor
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   _applyThemeOverrides() {
     const newHash = JSON.stringify({
       dm: this.config.darkMode,
       fc: this.config.fontColorOverride,
       op: this.config.opacityOverride,
-      ac: this.config.accentColor
+      ac: this.config.accentColor,
+      vhc: this.config.venueHomeColor,
+      vhb: this.config.venueHomeBackground,
+      vac: this.config.venueAwayColor,
+      vab: this.config.venueAwayBackground,
+      vnc: this.config.venueNeutralColor,
+      vnb: this.config.venueNeutralBackground
     });
     if (newHash === this._themeConfigHash) return;
     this._themeConfigHash = newHash;
@@ -909,7 +930,13 @@ Module.register("MMM-MyTeams-Fixtures", {
       this.config.darkMode !== null ||
       this.config.fontColorOverride !== null ||
       this.config.opacityOverride  !== null ||
-      this.config.accentColor;
+      this.config.accentColor ||
+      this.config.venueHomeColor !== "#ffffff" ||
+      this.config.venueHomeBackground !== "#018749" ||
+      this.config.venueAwayColor !== "#ffffff" ||
+      this.config.venueAwayBackground !== "#555555" ||
+      this.config.venueNeutralColor !== "#000000" ||
+      this.config.venueNeutralBackground !== "#add8e6";
 
     if (!hasOverrides) {
       if (styleEl) styleEl.remove();
@@ -928,6 +955,14 @@ Module.register("MMM-MyTeams-Fixtures", {
     if (this.config.accentColor) {
       css += `.myteams-fixtures { --mmf-accent-color: ${this.config.accentColor}; }\n`;
     }
+
+    // Venue color overrides
+    if (this.config.venueHomeColor)      css += `.myteams-fixtures { --mmf-venue-home-color: ${this.config.venueHomeColor}; }\n`;
+    if (this.config.venueHomeBackground) css += `.myteams-fixtures { --mmf-venue-home-bg: ${this.config.venueHomeBackground}; }\n`;
+    if (this.config.venueAwayColor)      css += `.myteams-fixtures { --mmf-venue-away-color: ${this.config.venueAwayColor}; }\n`;
+    if (this.config.venueAwayBackground) css += `.myteams-fixtures { --mmf-venue-away-bg: ${this.config.venueAwayBackground}; }\n`;
+    if (this.config.venueNeutralColor)   css += `.myteams-fixtures { --mmf-venue-neutral-color: ${this.config.venueNeutralColor}; }\n`;
+    if (this.config.venueNeutralBackground) css += `.myteams-fixtures { --mmf-venue-neutral-bg: ${this.config.venueNeutralBackground}; }\n`;
 
     if (this.config.darkMode === true) {
       css += `.myteams-fixtures { background-color: #111 !important; color: #fff !important; }\n`;
